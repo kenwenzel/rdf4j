@@ -30,6 +30,7 @@ import org.eclipse.rdf4j.query.algebra.DeleteData;
 import org.eclipse.rdf4j.query.algebra.DescribeOperator;
 import org.eclipse.rdf4j.query.algebra.Difference;
 import org.eclipse.rdf4j.query.algebra.Distinct;
+import org.eclipse.rdf4j.query.algebra.Drop;
 import org.eclipse.rdf4j.query.algebra.EmptySet;
 import org.eclipse.rdf4j.query.algebra.Exists;
 import org.eclipse.rdf4j.query.algebra.Extension;
@@ -201,6 +202,11 @@ public abstract class AbstractQueryModelVisitor<X extends Exception> implements 
 	@Override
 	public void meet(Distinct node) throws X {
 		meetUnaryTupleOperator(node);
+	}
+
+	@Override
+	public void meet(Drop node) throws X {
+		meetUpdateExpr(node);
 	}
 
 	@Override

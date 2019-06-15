@@ -56,6 +56,8 @@ public interface QueryModelVisitor<X extends Exception> {
 
 	public void meet(Distinct node) throws X;
 
+	public void meet(Drop node) throws X;
+
 	public void meet(EmptySet node) throws X;
 
 	public void meet(Exists node) throws X;
