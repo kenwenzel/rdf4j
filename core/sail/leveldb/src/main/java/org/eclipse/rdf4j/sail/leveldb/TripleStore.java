@@ -16,13 +16,22 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.NavigableMap;
 import java.util.Properties;
 import java.util.Set;
 import java.util.StringTokenizer;
+import java.util.TreeMap;
+import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.eclipse.rdf4j.common.io.ByteArrayUtil;
 import org.eclipse.rdf4j.sail.SailException;
@@ -131,8 +140,7 @@ class TripleStore implements Closeable {
      */
     private final List<TripleIndex> indexes = new ArrayList<>();
     private final boolean forceSync;
-    private final TxnStatusFile txnStatusFile;
-    private volatile RecordCache updatedTriplesCache;
+    private volatile List<byte[]> updatedTriplesCache;
 
     /*--------------*
      * Constructors *
@@ -145,7 +153,6 @@ class TripleStore implements Closeable {
     public TripleStore(File dir, String indexSpecStr, boolean forceSync) throws IOException, SailException {
         this.dir = dir;
         this.forceSync = forceSync;
-        this.txnStatusFile = new TxnStatusFile(dir);
 
         File propFile = new File(dir, PROPERTIES_FILE);
 
@@ -170,14 +177,6 @@ class TripleStore implements Closeable {
             // Initialize existing indexes
             Set<String> indexSpecs = getIndexSpecs();
             initIndexes(indexSpecs);
-
-            // Check transaction status
-            TxnStatus txnStatus = txnStatusFile.getTxnStatus();
-            if (txnStatus == TxnStatus.NONE) {
-                logger.trace("No uncompleted transactions found");
-            } else {
-                processUncompletedTransaction(txnStatus);
-            }
 
             // Compare the existing indexes with the requested indexes
             Set<String> reqIndexSpecs = parseIndexSpecList(indexSpecStr);
@@ -274,51 +273,6 @@ class TripleStore implements Closeable {
         }
     }
 
-    private void processUncompletedTransaction(TxnStatus txnStatus) throws IOException {
-        switch (txnStatus) {
-            case COMMITTING:
-                logger.info("Detected uncompleted commit, trying to complete");
-                try {
-                    commit();
-                    logger.info("Uncompleted commit completed successfully");
-                } catch (IOException e) {
-                    logger.error("Failed to restore from uncompleted commit", e);
-                    throw e;
-                }
-                break;
-            case ROLLING_BACK:
-                logger.info("Detected uncompleted rollback, trying to complete");
-                try {
-                    rollback();
-                    logger.info("Uncompleted rollback completed successfully");
-                } catch (IOException e) {
-                    logger.error("Failed to restore from uncompleted rollback", e);
-                    throw e;
-                }
-                break;
-            case ACTIVE:
-                logger.info("Detected unfinished transaction, trying to roll back");
-                try {
-                    rollback();
-                    logger.info("Unfinished transaction rolled back successfully");
-                } catch (IOException e) {
-                    logger.error("Failed to roll back unfinished transaction", e);
-                    throw e;
-                }
-                break;
-            case UNKNOWN:
-                logger.info("Read invalid or unknown transaction status, trying to roll back");
-                try {
-                    rollback();
-                    logger.info("Successfully performed a rollback for invalid or unknown transaction status");
-                } catch (IOException e) {
-                    logger.error("Failed to perform rollback for invalid or unknown transaction status", e);
-                    throw e;
-                }
-                break;
-        }
-    }
-
     private void reindex(Set<String> currentIndexSpecs, Set<String> newIndexSpecs) throws IOException, SailException {
         Map<String, TripleIndex> currentIndexes = new HashMap<>();
         for (TripleIndex index : indexes) {
@@ -340,11 +294,10 @@ class TripleStore implements Closeable {
                 DB addedDB = null;
                 RecordIterator sourceIter = null;
                 try {
-                    addedDB = addedIndex.getDB();
-                    sourceIter = new DBRecordIterator(sourceIndex.getDB().iterator());
+                    sourceIter = new DBRecordIterator(sourceIndex.map.keySet().iterator());
                     byte[] value = null;
                     while ((value = sourceIter.next()) != null) {
-                        addedDB.put(value, EMPTY);
+                        addedIndex.put(value, EMPTY);
                     }
                 } finally {
                     try {
@@ -399,7 +352,6 @@ class TripleStore implements Closeable {
             for (TripleIndex index : indexes) {
                 try {
                     index.commit();
-                    index.getDB().close();
                 } catch (Throwable e) {
                     logger.warn("Failed to close file for {} index", new String(index.getFieldSeq()));
                     caughtExceptions.add(e);
@@ -409,16 +361,7 @@ class TripleStore implements Closeable {
                 throw new IOException(caughtExceptions.get(0));
             }
         } finally {
-            try {
-                txnStatusFile.close();
-            } finally {
-                // Should have been removed upon commit() or rollback(), but just to be sure
-                RecordCache toCloseUpdatedTriplesCache = updatedTriplesCache;
-                updatedTriplesCache = null;
-                if (toCloseUpdatedTriplesCache != null) {
-                    toCloseUpdatedTriplesCache.discard();
-                }
-            }
+            updatedTriplesCache = null;
         }
     }
 
@@ -517,7 +460,7 @@ class TripleStore implements Closeable {
             byte[] minValue = getMinValue(subj, pred, obj, context);
             byte[] maxValue = getMaxValue(subj, pred, obj, context);
 
-            return new RangeDBRecordIterator(index.tripleComparator, index.iterator(), searchKey, searchMask, minValue, maxValue);
+            return new RangeDBRecordIterator(index.tripleComparator, index.iterator(minValue), searchKey, searchMask, minValue, maxValue);
         } else {
             // Use sequential scan
             return new RangeDBRecordIterator(index.tripleComparator, index.iterator(), searchKey, searchMask, null, null);
@@ -526,18 +469,19 @@ class TripleStore implements Closeable {
 
     protected double cardinality(int subj, int pred, int obj, int context) throws IOException {
         TripleIndex index = getBestIndex(subj, pred, obj, context);
-        DB db = index.getDB();
 
         double rangeSize;
 
         if (index.getPatternScore(subj, pred, obj, context) == 0) {
-            byte[] minValue = getMinValue(-1, -1, -1, -1);
-            byte[] maxValue = getMaxValue(-1, -1, -1, -1);
-            rangeSize = db.getApproximateSizes(new Range(minValue, maxValue))[0] / maxValue.length;
+            synchronized (index.map) {
+                rangeSize = index.map.size();
+            }
         } else {
             byte[] minValue = getMinValue(subj, pred, obj, context);
             byte[] maxValue = getMaxValue(subj, pred, obj, context);
-            rangeSize = db.getApproximateSizes(new Range(minValue, maxValue))[0] / maxValue.length;
+            synchronized (index.map) {
+                rangeSize = index.map.navigableKeySet().subSet(minValue, maxValue).size();
+            }
         }
 
         return rangeSize;
@@ -628,7 +572,7 @@ class TripleStore implements Closeable {
         if (storedData == null || !Arrays.equals(data, storedData)) {
             indexes.get(0).put(data, EMPTY);
 
-            updatedTriplesCache.storeRecord(data);
+            updatedTriplesCache.add(data);
         }
 
         return stAdded;
@@ -713,7 +657,7 @@ class TripleStore implements Closeable {
                 if ((data[FLAG_IDX] & REMOVED_FLAG) == 0) {
                     data[FLAG_IDX] |= REMOVED_FLAG;
 
-                    updatedTriplesCache.storeRecord(data);
+                    updatedTriplesCache.add(data);
 
                     for (TripleIndex index : indexes) {
                         index.put(data, EMPTY);
@@ -731,21 +675,7 @@ class TripleStore implements Closeable {
     }
 
     public void startTransaction() throws IOException {
-        txnStatusFile.setTxnStatus(TxnStatus.ACTIVE);
-
-        // Create a record cache for storing updated triples with a maximum of
-        // some 10% of the number of triples
-        byte[] minValue = getMinValue(-1, -1, -1, -1);
-        byte[] maxValue = getMaxValue(-1, -1, -1, -1);
-        long approximateRecords = indexes.get(0).getDB().getApproximateSizes(new Range(minValue, maxValue))[0] / maxValue.length;
-        long maxRecords = approximateRecords / 10L;
-        if (updatedTriplesCache == null) {
-            updatedTriplesCache = new SequentialRecordCache(dir, RECORD_LENGTH, maxRecords);
-        } else {
-            assert updatedTriplesCache
-                .getRecordCount() == 0L : "updatedTripleCache should have been cleared upon commit or rollback";
-            updatedTriplesCache.setMaxRecords(maxRecords);
-        }
+                 updatedTriplesCache = new ArrayList<>();
 
         for (TripleIndex index : indexes) {
             index.startTransaction();
@@ -753,28 +683,15 @@ class TripleStore implements Closeable {
     }
 
     public void commit() throws IOException {
-        txnStatusFile.setTxnStatus(TxnStatus.COMMITTING);
-
-        // updatedTriplesCache will be null when recovering from a crashed commit
-        boolean validCache = updatedTriplesCache != null && updatedTriplesCache.isValid();
-
         for (TripleIndex index : indexes) {
             index.commit();
             index.startTransaction();
         }
 
-        RecordIterator iter;
-        if (validCache) {
-            // Use the cached set of updated triples
-            iter = updatedTriplesCache.getRecords();
-        } else {
-            // Cache is invalid; too much updates(?). Iterate over all triples
-            iter = new DBRecordIterator(indexes.get(0).iterator());
-        }
-
+        Iterator<byte[]> iter = updatedTriplesCache.iterator();
         try {
-            byte[] data;
-            while ((data = iter.next()) != null) {
+            while (iter.hasNext()) {
+                byte[] data = iter.next();
                 byte flags = data[FLAG_IDX];
                 boolean wasAdded = (flags & ADDED_FLAG) != 0;
                 boolean wasRemoved = (flags & REMOVED_FLAG) != 0;
@@ -782,7 +699,7 @@ class TripleStore implements Closeable {
 
                 if (wasRemoved) {
                     for (TripleIndex index : indexes) {
-                        index.writeBatch.delete(data);
+                        index.remove(data);
                     }
                 } else if (wasAdded || wasToggled) {
                     if (wasToggled) {
@@ -792,12 +709,13 @@ class TripleStore implements Closeable {
                         data[FLAG_IDX] ^= ADDED_FLAG;
                     }
                     for (TripleIndex index : indexes) {
+                        index.remove(data);
                         index.put(data, EMPTY);
                     }
                 }
             }
         } finally {
-            iter.close();
+            // iter.close();
         }
 
         for (TripleIndex index : indexes) {
@@ -805,18 +723,15 @@ class TripleStore implements Closeable {
         }
 
         if (updatedTriplesCache != null) {
-            updatedTriplesCache.clear();
+           updatedTriplesCache = null;
         }
-
-        txnStatusFile.setTxnStatus(TxnStatus.NONE);
         // checkAllCommitted();
     }
 
     private void checkAllCommitted() throws IOException {
         for (TripleIndex index : indexes) {
             System.out.println("Checking " + index + " index");
-            DB db = index.getDB();
-            try (RecordIterator iter = new DBRecordIterator(db.iterator())) {
+            try (RecordIterator iter = new DBRecordIterator(index.iterator())) {
                 for (byte[] data = iter.next(); data != null; data = iter.next()) {
                     byte flags = data[FLAG_IDX];
                     boolean wasAdded = (flags & ADDED_FLAG) != 0;
@@ -828,58 +743,6 @@ class TripleStore implements Closeable {
                 }
             }
         }
-    }
-
-    public void rollback() throws IOException {
-        txnStatusFile.setTxnStatus(TxnStatus.ROLLING_BACK);
-
-        // updatedTriplesCache will be null when recovering from a crash
-        boolean validCache = updatedTriplesCache != null && updatedTriplesCache.isValid();
-
-        byte txnFlagsMask = ~(ADDED_FLAG | REMOVED_FLAG | TOGGLE_EXPLICIT_FLAG);
-
-        for (TripleIndex index : indexes) {
-            DB db = index.getDB();
-
-            RecordIterator iter;
-            if (validCache) {
-                // Use the cached set of updated triples
-                iter = updatedTriplesCache.getRecords();
-            } else {
-                // Cache is invalid; too much updates(?). Iterate over all triples
-                iter = new DBRecordIterator(db.iterator());
-            }
-
-            try {
-                byte[] data;
-                while ((data = iter.next()) != null) {
-                    byte flags = data[FLAG_IDX];
-                    boolean wasAdded = (flags & ADDED_FLAG) != 0;
-                    boolean wasRemoved = (flags & REMOVED_FLAG) != 0;
-                    boolean wasToggled = (flags & TOGGLE_EXPLICIT_FLAG) != 0;
-
-                    if (wasAdded) {
-                        db.delete(data);
-                    } else {
-                        if (wasRemoved || wasToggled) {
-                            data[FLAG_IDX] &= txnFlagsMask;
-
-                            db.put(data, EMPTY);
-                        }
-                    }
-                }
-            } finally {
-                iter.close();
-            }
-
-            index.commit();
-        }
-
-        if (updatedTriplesCache != null) {
-            updatedTriplesCache.clear();
-        }
-
-        txnStatusFile.setTxnStatus(TxnStatus.NONE);
     }
 
     private byte[] getData(int subj, int pred, int obj, int context, int flags) {
@@ -1091,10 +954,8 @@ class TripleStore implements Closeable {
         private final TripleComparator tripleComparator;
         private final String fieldSeq;
 
-        private DB db;
-        private Snapshot snapshot;
-        private DBIterator iterator;
-        private WriteBatch writeBatch;
+        private TreeMap<byte[], byte[]> map;
+        private WeakHashMap<KeyIterator, Boolean> iterators = new WeakHashMap<>();
 
         public TripleIndex(String fieldSeq) throws IOException {
             this.fieldSeq = fieldSeq;
@@ -1103,18 +964,7 @@ class TripleStore implements Closeable {
         }
 
         private void open() throws IOException {
-            Options options = new Options();
-            options.createIfMissing(true);
-            // set comparator for this index
-            options.comparator(tripleComparator);
-
-            if (memEnv == null) {
-                // set compression type
-                options.compressionType(CompressionType.SNAPPY);
-                db = Iq80DBFactory.factory.open(new File(dir, getFilenamePrefix(fieldSeq)), options);
-            } else {
-                db = new DbImpl(options, getFilenamePrefix(fieldSeq), memEnv);
-            }
+            map = new TreeMap<>(tripleComparator);
         }
 
         private String getFilenamePrefix(String fieldSeq) {
@@ -1125,15 +975,17 @@ class TripleStore implements Closeable {
             return tripleComparator.getFieldSeq();
         }
 
-        public DB getDB() {
-            return db;
+        void put(byte[] key, byte[] value) {
+            synchronized (map) {
+                map.put(key, value);
+                iterators.keySet().forEach(it -> it.reset());
+            }
         }
 
-        void put(byte[] key, byte[] value) {
-            if (writeBatch != null) {
-                writeBatch.put(key, value);
-            } else {
-                db.put(key, value);
+        void remove(byte[] key) {
+            synchronized (map) {
+                map.remove(key);
+                iterators.keySet().forEach(it -> it.reset());
             }
         }
 
@@ -1145,15 +997,9 @@ class TripleStore implements Closeable {
          * @return The corresponding stored key
          */
         public byte[] get(byte[] key) {
-            if (iterator == null) {
-                iterator = db.iterator();
-            }
-            iterator.seek(key);
-            if (iterator.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = iterator.next();
-                if (tripleComparator.compare(key, entry.getKey()) == 0) {
-                    return entry.getKey();
-                }
+            Map.Entry<byte[], byte[]> storedEntry = map.ceilingEntry(key);
+            if (storedEntry != null && tripleComparator.compare(storedEntry.getKey(), key) == 0) {
+                return storedEntry.getKey();
             }
             return null;
         }
@@ -1211,8 +1057,6 @@ class TripleStore implements Closeable {
         }
 
         public void destroy() throws IOException {
-            db.close();
-            Iq80DBFactory.factory.destroy(new File(dir, getFilenamePrefix(fieldSeq)), new Options());
         }
 
         public void clear() throws IOException {
@@ -1221,30 +1065,56 @@ class TripleStore implements Closeable {
         }
 
         void startTransaction() {
-            snapshot = db.getSnapshot();
-            writeBatch = memEnv == null ? db.createWriteBatch() : null;
+           // do nothing
         }
 
         void commit() throws IOException {
-            if (writeBatch != null) {
-                db.write(writeBatch);
-                writeBatch = null;
-            }
-            if (snapshot != null) {
-                snapshot.close();
-                snapshot = null;
-            }
-            if (iterator != null) {
-                iterator.close();
-                iterator = null;
+            // do nothing
+        }
+
+        public Iterator<byte[]> iterator(byte[] minKey) {
+            synchronized (map) {
+                return new KeyIterator(map.navigableKeySet().tailSet(minKey).iterator());
             }
         }
 
-        public DBIterator iterator() {
-            if (snapshot == null) {
-                return db.iterator();
-            } else {
-                return db.iterator(new ReadOptions().snapshot(snapshot));
+        public Iterator<byte[]> iterator() {
+            synchronized (map) {
+                return new KeyIterator(map.navigableKeySet().iterator());
+            }
+        }
+
+        class KeyIterator implements Iterator<byte[]> {
+            Iterator<byte[]> wrapped;
+            byte[] next;
+
+            public KeyIterator(Iterator<byte[]> wrapped) {
+                this.wrapped = wrapped;
+                synchronized (map) {
+                    this.next = wrapped.hasNext() ? wrapped.next() : null;
+                    iterators.put(this, true);
+                }
+            }
+
+            @Override
+            public boolean hasNext() {
+               return next != null;
+            }
+
+            @Override
+            public byte[] next() {
+                byte[] current = next;
+                synchronized (map) {
+                    if (wrapped == null) {
+                        wrapped = map.navigableKeySet().tailSet(next, false).iterator();
+                    }
+                    this.next = wrapped.hasNext() ? wrapped.next() : null;
+                }
+                return current;
+            }
+
+            public void reset() {
+                this.wrapped = null;
             }
         }
     }

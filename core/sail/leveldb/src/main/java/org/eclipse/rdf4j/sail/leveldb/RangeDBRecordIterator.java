@@ -1,6 +1,7 @@
 package org.eclipse.rdf4j.sail.leveldb;
 
 import java.io.IOException;
+import java.util.Iterator;
 
 import org.eclipse.rdf4j.common.io.ByteArrayUtil;
 import org.iq80.leveldb.DBComparator;
@@ -10,7 +11,7 @@ public class RangeDBRecordIterator implements RecordIterator {
 
     private final DBComparator comparator;
 
-    private final DBIterator wrapped;
+    private final Iterator<byte[]> wrapped;
 
     private final byte[] searchKey;
 
@@ -20,7 +21,7 @@ public class RangeDBRecordIterator implements RecordIterator {
 
     private final byte[] maxValue;
 
-    public RangeDBRecordIterator(DBComparator comparator, DBIterator wrapped,
+    public RangeDBRecordIterator(DBComparator comparator, Iterator<byte[]> wrapped,
         byte[] searchKey, byte[] searchMask, byte[] minValue, byte[] maxValue) {
         this.comparator = comparator;
         this.wrapped = wrapped;
@@ -28,15 +29,12 @@ public class RangeDBRecordIterator implements RecordIterator {
         this.searchMask = searchMask;
         this.minValue = minValue;
         this.maxValue = maxValue;
-        if (minValue != null) {
-            wrapped.seek(minValue);
-        }
     }
 
     @Override
     public byte[] next() throws IOException {
         while (wrapped.hasNext()) {
-            byte[] value = wrapped.next().getKey();
+            byte[] value = wrapped.next();
             if (maxValue != null && comparator.compare(maxValue, value) < 0) {
                 // Reached maximum value, stop iterating
                 close();
@@ -54,6 +52,6 @@ public class RangeDBRecordIterator implements RecordIterator {
 
     @Override
     public void close() throws IOException {
-        wrapped.close();
+        // wrapped.close();
     }
 }
