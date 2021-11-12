@@ -39,7 +39,11 @@ import org.iq80.leveldb.CompressionType;
 import org.iq80.leveldb.DB;
 import org.iq80.leveldb.DBIterator;
 import org.iq80.leveldb.Options;
+import org.iq80.leveldb.WriteBatch;
+import org.iq80.leveldb.env.Env;
+import org.iq80.leveldb.impl.DbImpl;
 import org.iq80.leveldb.impl.Iq80DBFactory;
+import org.iq80.leveldb.memenv.MemEnv;
 
 /**
  * File-based indexed storage and retrieval of RDF values. ValueStore maps RDF values to integer IDs and vice-versa.
@@ -120,6 +124,8 @@ class ValueStore extends AbstractValueFactory {
      * Used to do the actual storage of values, once they're translated to byte arrays.
      */
     private DB db;
+    private Env memEnv = null; //MemEnv.createEnv();
+    private WriteBatch writeBatch;
 
     /**
      * An object that indicates the revision of the value store, which is used to check if cached value IDs are still valid. In order to be
@@ -130,10 +136,6 @@ class ValueStore extends AbstractValueFactory {
      * The next ID that is associated with a stored value
      */
     private long nextId;
-    /**
-     * A key to store the next ID within the database
-     */
-    private byte[] nextIdKey = "__NEXT_ID\u0000".getBytes(StandardCharsets.UTF_8);
 
     /*--------------*
      * Constructors *
@@ -188,27 +190,35 @@ class ValueStore extends AbstractValueFactory {
      * Methods *
      *---------*/
 
+    public void startTransaction() throws IOException {
+        writeBatch = db.createWriteBatch();
+    }
+
+    public void commit() throws IOException {
+        db.write(writeBatch);
+        writeBatch = null;
+    }
+
     private void open() throws IOException {
         File dbDir = new File(dataDir, FILENAME_PREFIX);
         dbDir.mkdirs();
 
         Options options = new Options();
         options.createIfMissing(true);
-        // set compression type
-        options.compressionType(CompressionType.SNAPPY);
 
-        db = Iq80DBFactory.factory.open(new File(dataDir, FILENAME_PREFIX), options);
+        if (memEnv == null) {
+            // set compression type
+            options.compressionType(CompressionType.SNAPPY);
+            db = Iq80DBFactory.factory.open(new File(dataDir, FILENAME_PREFIX), options);
+        } else {
+            db = new DbImpl(options, new File(dataDir, FILENAME_PREFIX).toString(), memEnv);
+        }
     }
 
     private long nextId() throws IOException {
         long result = nextId;
         nextId++;
         return result;
-    }
-
-    protected byte[] toBytes(long value) {
-        return ByteBuffer.wrap(new byte[Long.BYTES]).order(BYTE_ORDER)
-            .putLong(value).array();
     }
 
     protected byte[] id2data(long id) {
@@ -329,7 +339,8 @@ class ValueStore extends AbstractValueFactory {
         db.write(db.createWriteBatch().put(hashAndNr, idData).put(idData, data));
 		*/
         byte[] idData = id2data(id);
-        db.write(db.createWriteBatch().put(data, idData).put(idData, data));
+        writeBatch.put(data, idData);
+        writeBatch.put(idData, data);
     }
 
     /**
@@ -448,6 +459,9 @@ class ValueStore extends AbstractValueFactory {
         try {
             Lock writeLock = lockManager.getWriteLock();
             try {
+                if (writeBatch != null) {
+                    writeBatch.close();
+                }
                 db.close();
                 Iq80DBFactory.factory.destroy(new File(dataDir, FILENAME_PREFIX), new Options());
 
@@ -714,8 +728,6 @@ class ValueStore extends AbstractValueFactory {
         if (id == NativeValue.UNKNOWN_ID && create) {
             id = (int) nextId();
             storeId(id, namespaceData);
-        } else {
-            id = NativeValue.UNKNOWN_ID;
         }
 
         if (id != NativeValue.UNKNOWN_ID) {

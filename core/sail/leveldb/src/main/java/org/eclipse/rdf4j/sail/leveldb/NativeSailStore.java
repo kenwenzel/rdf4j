@@ -362,6 +362,7 @@ class NativeSailStore implements SailStore {
 							contextStore.sync();
 						} finally {
 							if (storeTxnStarted.get()) {
+								valueStore.commit();
 								tripleStore.commit();
 								// do not set flag to false until _after_ commit is succesfully completed.
 								storeTxnStarted.set(false);
@@ -443,6 +444,7 @@ class NativeSailStore implements SailStore {
 
 			if (storeTxnStarted.compareAndSet(false, true)) {
 				try {
+					valueStore.startTransaction();
 					tripleStore.startTransaction();
 				} catch (IOException e) {
 					storeTxnStarted.set(false);
