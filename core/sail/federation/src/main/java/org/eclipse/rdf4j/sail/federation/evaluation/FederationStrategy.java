@@ -21,8 +21,10 @@ import org.eclipse.rdf4j.query.algebra.LeftJoin;
 import org.eclipse.rdf4j.query.algebra.TupleExpr;
 import org.eclipse.rdf4j.query.algebra.Union;
 import org.eclipse.rdf4j.query.algebra.evaluation.EvaluationStrategy;
+import org.eclipse.rdf4j.query.algebra.evaluation.QueryEvaluationStep;
 import org.eclipse.rdf4j.query.algebra.evaluation.TripleSource;
 import org.eclipse.rdf4j.query.algebra.evaluation.federation.FederatedServiceResolver;
+import org.eclipse.rdf4j.query.algebra.evaluation.impl.QueryEvaluationContext;
 import org.eclipse.rdf4j.query.algebra.evaluation.impl.StrictEvaluationStrategy;
 import org.eclipse.rdf4j.query.algebra.evaluation.iterator.BadlyDesignedLeftJoinIterator;
 import org.eclipse.rdf4j.query.algebra.evaluation.iterator.HashJoinIteration;
@@ -62,6 +64,22 @@ public class FederationStrategy extends StrictEvaluationStrategy {
 	}
 
 	@Override
+	public QueryEvaluationStep precompile(TupleExpr expr, QueryEvaluationContext context)
+			throws QueryEvaluationException {
+		QueryEvaluationStep result;
+		if (expr instanceof Join) {
+			return QueryEvaluationStep.minimal(this, expr);
+		} else if (expr instanceof NaryJoin) {
+			result = prepare((NaryJoin) expr);
+		} else if (expr instanceof OwnedTupleExpr) {
+			result = prepare((OwnedTupleExpr) expr);
+		} else {
+			result = super.precompile(expr, context);
+		}
+		return result;
+	}
+
+	@Override
 	public CloseableIteration<BindingSet, QueryEvaluationException> evaluate(Join join, BindingSet bindings)
 			throws QueryEvaluationException {
 		CloseableIteration<BindingSet, QueryEvaluationException> result = evaluate(join.getLeftArg(), bindings);
@@ -70,6 +88,14 @@ public class FederationStrategy extends StrictEvaluationStrategy {
 			executor.execute((Runnable) result);
 		}
 		return result;
+	}
+
+	public QueryEvaluationStep prepare(NaryJoin join) {
+		return QueryEvaluationStep.minimal(this, join);
+	}
+
+	public QueryEvaluationStep prepare(OwnedTupleExpr owe) {
+		return QueryEvaluationStep.minimal(this, owe);
 	}
 
 	public CloseableIteration<BindingSet, QueryEvaluationException> evaluate(NaryJoin join, BindingSet bindings)
@@ -85,7 +111,7 @@ public class FederationStrategy extends StrictEvaluationStrategy {
 					|| (rightArg instanceof OwnedTupleExpr && ((OwnedTupleExpr) rightArg).hasQuery())) {
 				TupleExpr leftArg = join.getArg(i - 1);
 				collectedBindingNames.addAll(leftArg.getBindingNames());
-				result = new HashJoinIteration(this, result, collectedBindingNames, evaluate(rightArg, bindings),
+				result = new HashJoinIteration(result, collectedBindingNames, evaluate(rightArg, bindings),
 						rightArg.getBindingNames(), false);
 			} else {
 				result = new ParallelJoinCursor(this, result, join.getArg(i)); // NOPMD
@@ -97,27 +123,34 @@ public class FederationStrategy extends StrictEvaluationStrategy {
 	}
 
 	@Override
-	public CloseableIteration<BindingSet, QueryEvaluationException> evaluate(LeftJoin leftJoin,
-			final BindingSet bindings) throws QueryEvaluationException {
-		// Check whether optional join is "well designed" as defined in section
-		// 4.2 of "Semantics and Complexity of SPARQL", 2006, Jorge Pérez et al.
-		Set<String> boundVars = bindings.getBindingNames();
-		Set<String> leftVars = leftJoin.getLeftArg().getBindingNames();
-		Set<String> optionalVars = leftJoin.getRightArg().getBindingNames();
+	public QueryEvaluationStep prepare(LeftJoin leftJoin, QueryEvaluationContext context)
+			throws QueryEvaluationException {
+		return new QueryEvaluationStep() {
+			@Override
+			public CloseableIteration<BindingSet, QueryEvaluationException> evaluate(BindingSet bindings) {
+				// TODO Auto-generated method stub
+				// Check whether optional join is "well designed" as defined in section
+				// 4.2 of "Semantics and Complexity of SPARQL", 2006, Jorge Pérez et al.
+				Set<String> boundVars = bindings.getBindingNames();
+				Set<String> leftVars = leftJoin.getLeftArg().getBindingNames();
+				Set<String> optionalVars = leftJoin.getRightArg().getBindingNames();
 
-		final Set<String> problemVars = new HashSet<>(boundVars);
-		problemVars.retainAll(optionalVars);
-		problemVars.removeAll(leftVars);
+				final Set<String> problemVars = new HashSet<>(boundVars);
+				problemVars.retainAll(optionalVars);
+				problemVars.removeAll(leftVars);
 
-		CloseableIteration<BindingSet, QueryEvaluationException> result;
-		if (problemVars.isEmpty()) {
-			// left join is "well designed"
-			result = new ParallelLeftJoinCursor(this, leftJoin, bindings);
-			executor.execute((Runnable) result);
-		} else {
-			result = new BadlyDesignedLeftJoinIterator(this, leftJoin, bindings, problemVars);
-		}
-		return result;
+				CloseableIteration<BindingSet, QueryEvaluationException> result;
+				if (problemVars.isEmpty()) {
+					// left join is "well designed"
+					result = new ParallelLeftJoinCursor(FederationStrategy.this, leftJoin, bindings, context);
+					executor.execute((Runnable) result);
+				} else {
+					result = new BadlyDesignedLeftJoinIterator(FederationStrategy.this, leftJoin, bindings, problemVars,
+							context);
+				}
+				return result;
+			}
+		};
 	}
 
 	@Override
