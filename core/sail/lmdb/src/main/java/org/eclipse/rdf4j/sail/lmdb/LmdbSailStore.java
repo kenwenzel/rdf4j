@@ -59,18 +59,48 @@ class LmdbSailStore implements SailStore {
 	private final ValueStore valueStore;
 
 	private final ExecutorService tripleStoreExecutor = Executors.newCachedThreadPool();
-	private final Operation[] opBuffer = new Operation[1024];
-	private volatile int head = 0;
-	private volatile int tail = 0;
+	private final CircularBuffer<Operation> opQueue = new CircularBuffer<>(1024);
 	private volatile boolean tripleStoreCommitted;
-
 	private final AtomicBoolean running = new AtomicBoolean(false);
 
 	private boolean multiThreading = true;
 
+	static final class CircularBuffer<T> {
+		private final T[] elements;
+		private volatile int head = 0;
+		private volatile int tail = 0;
+
+		CircularBuffer(int size) {
+			this.elements = (T[]) new Object[size];
+		}
+
+		boolean add(T element) {
+			// faster version of:
+			// tail == Math.floorMod(head - 1, elements.length)
+			if (head > 0 ? tail == head - 1 : tail == elements.length - 1) {
+				return false;
+			}
+			elements[tail] = element;
+			tail = (tail + 1) % elements.length;
+			return true;
+		}
+
+		T remove() {
+			T result = null;
+			if (tail != head) {
+				result = elements[head];
+				head = (head + 1) % elements.length;
+			}
+			return result;
+		}
+	}
+
 	interface Operation {
 		void execute() throws Exception;
 	}
+
+	static final Operation END_TRANSACTION = () -> {
+	};
 
 	static class Quad {
 		long s, p, o, c;
@@ -150,13 +180,11 @@ class LmdbSailStore implements SailStore {
 						}
 					} finally {
 						if (tripleStore != null) {
-							if (running.get()) {
-								while (!tripleStoreCommitted) {
-									Thread.yield();
-								}
-								running.set(false);
-							}
+							running.set(false);
 							tripleStoreExecutor.shutdown();
+							while (!tripleStoreExecutor.isTerminated()) {
+								Thread.yield();
+							}
 							tripleStore.close();
 						}
 					}
@@ -349,11 +377,9 @@ class LmdbSailStore implements SailStore {
 			sinkStoreAccessLock.lock();
 			boolean activeTxn = storeTxnStarted.get();
 			if (multiThreading && activeTxn) {
-				while (tail == Math.floorMod(head - 1, opBuffer.length)) {
+				while (!opQueue.add(END_TRANSACTION)) {
 					Thread.yield();
 				}
-				opBuffer[tail] = null;
-				tail = (tail + 1) % opBuffer.length;
 			}
 			try {
 				try {
@@ -461,10 +487,11 @@ class LmdbSailStore implements SailStore {
 									while (running.get()) {
 										tripleStore.startTransaction();
 										while (true) {
-											if (tail != head) {
-												Operation op = opBuffer[head];
-												head = (head + 1) % opBuffer.length;
-												if (op == null) {
+											Operation op = opQueue.remove();
+											if (op != null) {
+												if (op == END_TRANSACTION) {
+													tripleStore.commit();
+													tripleStoreCommitted = true;
 													break;
 												} else {
 													op.execute();
@@ -473,8 +500,6 @@ class LmdbSailStore implements SailStore {
 												Thread.yield();
 											}
 										}
-										tripleStore.commit();
-										tripleStoreCommitted = true;
 
 										// wait until committed flag for triple store is reset
 										while (running.get() && tripleStoreCommitted) {
@@ -486,8 +511,12 @@ class LmdbSailStore implements SailStore {
 										long start = System.currentTimeMillis();
 										while (running.get() && !storeTxnStarted.get()) {
 											if (System.currentTimeMillis() - start > 2) {
-												running.set(false);
-												return null;
+												synchronized (LmdbSailSink.this) {
+													if (!storeTxnStarted.get()) {
+														running.set(false);
+														return null;
+													}
+												}
 											} else {
 												Thread.yield();
 											}
@@ -525,11 +554,9 @@ class LmdbSailStore implements SailStore {
 				q.explicit = explicit;
 
 				if (multiThreading) {
-					while (tail == Math.floorMod(head - 1, opBuffer.length)) {
+					while (!opQueue.add(q)) {
 						Thread.yield();
 					}
-					opBuffer[tail] = q;
-					tail = (tail + 1) % opBuffer.length;
 				} else {
 					q.execute();
 				}
@@ -627,11 +654,10 @@ class LmdbSailStore implements SailStore {
 							}
 						}
 					};
-					while (tail == Math.floorMod(head - 1, opBuffer.length)) {
+
+					while (!opQueue.add(removeOp)) {
 						Thread.yield();
 					}
-					opBuffer[tail] = removeOp;
-					tail = (tail + 1) % opBuffer.length;
 
 					while (!removeOp.finished) {
 						Thread.yield();
