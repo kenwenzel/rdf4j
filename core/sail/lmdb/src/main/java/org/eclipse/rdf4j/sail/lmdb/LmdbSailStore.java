@@ -62,9 +62,15 @@ class LmdbSailStore implements SailStore {
 	private final CircularBuffer<Operation> opQueue = new CircularBuffer<>(1024);
 	private volatile boolean tripleStoreCommitted;
 	private final AtomicBoolean running = new AtomicBoolean(false);
+	private boolean multiThreadingActive;
 
-	private boolean multiThreading = true;
+	private boolean enableMultiThreading = true;
 
+	/**
+	 * A fast non-blocking circular buffer backed by an array.
+	 *
+	 * @param <T> Type of elements within this buffer
+	 */
 	static final class CircularBuffer<T> {
 		private final T[] elements;
 		private volatile int head = 0;
@@ -95,20 +101,27 @@ class LmdbSailStore implements SailStore {
 		}
 	}
 
+	/**
+	 * An operation that can be executed asynchronously.
+	 */
 	interface Operation {
 		void execute() throws Exception;
 	}
 
+	/**
+	 * Special operation that marks the end of a transaction.
+	 */
 	static final Operation END_TRANSACTION = () -> {
 	};
 
-	static class Quad {
+	/**
+	 * Operation for adding a new quad.
+	 */
+	class AddQuadOperation implements Operation {
 		long s, p, o, c;
 		boolean explicit;
 		Resource context;
-	}
 
-	class AddQuadOperation extends Quad implements Operation {
 		@Override
 		public void execute() throws IOException {
 			boolean wasNew = tripleStore.storeTriple(s, p, o, c, explicit);
@@ -118,6 +131,9 @@ class LmdbSailStore implements SailStore {
 		}
 	}
 
+	/**
+	 * Super-class for operations that capture their finished state.
+	 */
 	abstract static class StatefulOperation implements Operation {
 		volatile boolean finished = false;
 	}
@@ -373,10 +389,10 @@ class LmdbSailStore implements SailStore {
 		}
 
 		@Override
-		public synchronized void flush() throws SailException {
+		public void flush() throws SailException {
 			sinkStoreAccessLock.lock();
 			boolean activeTxn = storeTxnStarted.get();
-			if (multiThreading && activeTxn) {
+			if (multiThreadingActive) {
 				while (!opQueue.add(END_TRANSACTION)) {
 					Thread.yield();
 				}
@@ -385,7 +401,7 @@ class LmdbSailStore implements SailStore {
 				try {
 					namespaceStore.sync();
 				} finally {
-					if (multiThreading && activeTxn) {
+					if (multiThreadingActive) {
 						while (!tripleStoreCommitted) {
 							Thread.yield();
 						}
@@ -395,7 +411,7 @@ class LmdbSailStore implements SailStore {
 					} finally {
 						if (activeTxn) {
 							valueStore.commit();
-							if (!multiThreading) {
+							if (!multiThreadingActive) {
 								tripleStore.commit();
 							}
 							// do not set flag to false until _after_ commit is successfully completed.
@@ -413,6 +429,7 @@ class LmdbSailStore implements SailStore {
 				logger.error("Encountered an unexpected problem while trying to commit", e);
 				throw e;
 			} finally {
+				multiThreadingActive = false;
 				sinkStoreAccessLock.unlock();
 			}
 		}
@@ -421,7 +438,7 @@ class LmdbSailStore implements SailStore {
 		public void setNamespace(String prefix, String name) throws SailException {
 			sinkStoreAccessLock.lock();
 			try {
-				startTriplestoreTransaction();
+				startTransaction(true);
 				namespaceStore.setNamespace(prefix, name);
 			} finally {
 				sinkStoreAccessLock.unlock();
@@ -432,7 +449,7 @@ class LmdbSailStore implements SailStore {
 		public void removeNamespace(String prefix) throws SailException {
 			sinkStoreAccessLock.lock();
 			try {
-				startTriplestoreTransaction();
+				startTransaction(true);
 				namespaceStore.removeNamespace(prefix);
 			} finally {
 				sinkStoreAccessLock.unlock();
@@ -443,7 +460,7 @@ class LmdbSailStore implements SailStore {
 		public void clearNamespaces() throws SailException {
 			sinkStoreAccessLock.lock();
 			try {
-				startTriplestoreTransaction();
+				startTransaction(true);
 				namespaceStore.clear();
 			} finally {
 				sinkStoreAccessLock.unlock();
@@ -476,65 +493,71 @@ class LmdbSailStore implements SailStore {
 		 *
 		 * @throws SailException if a transaction could not be started.
 		 */
-		private synchronized void startTriplestoreTransaction() throws SailException {
-			if (storeTxnStarted.compareAndSet(false, true)) {
-				try {
-					if (multiThreading) {
-						tripleStoreCommitted = false;
-						if (running.compareAndSet(false, true)) {
-							tripleStoreExecutor.submit(() -> {
-								try {
-									while (running.get()) {
-										tripleStore.startTransaction();
-										while (true) {
-											Operation op = opQueue.remove();
-											if (op != null) {
-												if (op == END_TRANSACTION) {
-													tripleStore.commit();
-													tripleStoreCommitted = true;
-													break;
-												} else {
-													op.execute();
-												}
-											} else {
-												Thread.yield();
-											}
-										}
-
-										// wait until committed flag for triple store is reset
-										while (running.get() && tripleStoreCommitted) {
-											Thread.yield();
-										}
-
-										// keep thread running for at least 2ms to lock-free wait for the next
-										// transaction
-										long start = System.currentTimeMillis();
-										while (running.get() && !storeTxnStarted.get()) {
-											if (System.currentTimeMillis() - start > 2) {
-												synchronized (LmdbSailSink.this) {
-													if (!storeTxnStarted.get()) {
-														running.set(false);
-														return null;
+		private void startTransaction(boolean preferThreading) throws SailException {
+			synchronized (storeTxnStarted) {
+				multiThreadingActive = preferThreading && enableMultiThreading;
+				if (!multiThreadingActive) {
+					running.set(false);
+				}
+				if (storeTxnStarted.compareAndSet(false, true)) {
+					try {
+						if (multiThreadingActive) {
+							tripleStoreCommitted = false;
+							if (running.compareAndSet(false, true)) {
+								tripleStoreExecutor.submit(() -> {
+									try {
+										while (running.get()) {
+											tripleStore.startTransaction();
+											while (true) {
+												Operation op = opQueue.remove();
+												if (op != null) {
+													if (op == END_TRANSACTION) {
+														tripleStore.commit();
+														tripleStoreCommitted = true;
+														break;
+													} else {
+														op.execute();
 													}
+												} else {
+													Thread.yield();
 												}
-											} else {
+											}
+
+											// wait until committed flag for triple store is reset
+											while (running.get() && tripleStoreCommitted) {
 												Thread.yield();
 											}
+
+											// keep thread running for at least 2ms to lock-free wait for the next
+											// transaction
+											long start = System.currentTimeMillis();
+											while (running.get() && !storeTxnStarted.get()) {
+												if (System.currentTimeMillis() - start > 2) {
+													synchronized (storeTxnStarted) {
+														if (!storeTxnStarted.get()) {
+															running.set(false);
+															return null;
+														}
+													}
+												} else {
+													Thread.yield();
+												}
+											}
 										}
+									} finally {
+										tripleStoreCommitted = true;
 									}
-								} finally {
-									tripleStoreCommitted = true;
-								}
-								return null;
-							});
+									return null;
+								});
+							}
+						} else {
+							tripleStore.startTransaction();
 						}
-					} else {
-						tripleStore.startTransaction();
+						valueStore.startTransaction();
+					} catch (Exception e) {
+						storeTxnStarted.set(false);
+						throw new SailException(e);
 					}
-					valueStore.startTransaction();
-				} catch (Exception e) {
-					storeTxnStarted.set(false);
-					throw new SailException(e);
 				}
 			}
 		}
@@ -543,7 +566,7 @@ class LmdbSailStore implements SailStore {
 				throws SailException {
 			sinkStoreAccessLock.lock();
 			try {
-				startTriplestoreTransaction();
+				startTransaction(true);
 
 				AddQuadOperation q = new AddQuadOperation();
 				q.s = valueStore.storeValue(subj);
@@ -553,7 +576,7 @@ class LmdbSailStore implements SailStore {
 				q.context = context;
 				q.explicit = explicit;
 
-				if (multiThreading) {
+				if (multiThreadingActive) {
 					while (!opQueue.add(q)) {
 						Thread.yield();
 					}
@@ -596,7 +619,7 @@ class LmdbSailStore implements SailStore {
 
 			sinkStoreAccessLock.lock();
 			try {
-				startTriplestoreTransaction();
+				startTransaction(false);
 				final long subjID;
 				if (subj != null) {
 					subjID = valueStore.getId(subj);
@@ -642,7 +665,7 @@ class LmdbSailStore implements SailStore {
 					}
 				}
 
-				if (multiThreading) {
+				if (multiThreadingActive) {
 					long[] removeCount = new long[1];
 					StatefulOperation removeOp = new StatefulOperation() {
 						@Override
@@ -687,8 +710,6 @@ class LmdbSailStore implements SailStore {
 		}
 	}
 
-	/**
-	 	 */
 	private final class LmdbSailDataset implements SailDataset {
 
 		private final boolean explicit;
