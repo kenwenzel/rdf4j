@@ -60,7 +60,7 @@ public class TestNativeStoreMemoryOverflow {
 	@Before
 	public void setUp() throws Exception {
 		testRepository = createRepository();
-		testRepository.initialize();
+		testRepository.init();
 
 		testCon = testRepository.getConnection();
 		testCon.setIsolationLevel(level);
