@@ -14,9 +14,9 @@
 	</properties>
 	<dependencies>
 		<dependency>
-			<groupId>io.github.pcmind</groupId>
-			<artifactId>leveldb</artifactId>
-			<version>1.2</version>
+			<groupId>uk.co.omega-prime</groupId>
+			<artifactId>btreemap</artifactId>
+			<version>1.2.0</version>
 		</dependency>
 		<dependency>
 			<groupId>${project.groupId}</groupId>
@@ -77,12 +77,6 @@
 		<dependency>
 			<groupId>${project.groupId}</groupId>
 			<artifactId>rdf4j-repository-manager</artifactId>
-			<version>${project.version}</version>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>${project.groupId}</groupId>
-			<artifactId>rdf4j-queryparser-serql</artifactId>
 			<version>${project.version}</version>
 			<scope>test</scope>
 		</dependency>

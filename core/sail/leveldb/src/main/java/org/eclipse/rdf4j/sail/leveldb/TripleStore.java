@@ -7,6 +7,7 @@
  *******************************************************************************/
 package org.eclipse.rdf4j.sail.leveldb;
 
+import uk.co.omegaprime.btreemap.BTreeMap;
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
@@ -16,39 +17,21 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.NavigableMap;
 import java.util.Properties;
 import java.util.Set;
 import java.util.StringTokenizer;
 import java.util.TreeMap;
 import java.util.WeakHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import org.eclipse.rdf4j.common.io.ByteArrayUtil;
 import org.eclipse.rdf4j.sail.SailException;
-import org.eclipse.rdf4j.sail.leveldb.TxnStatusFile.TxnStatus;
-import org.iq80.leveldb.CompressionType;
-import org.iq80.leveldb.DB;
-import org.iq80.leveldb.DBComparator;
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.Options;
-import org.iq80.leveldb.Range;
-import org.iq80.leveldb.ReadOptions;
-import org.iq80.leveldb.Snapshot;
-import org.iq80.leveldb.WriteBatch;
-import org.iq80.leveldb.env.Env;
-import org.iq80.leveldb.impl.DbImpl;
-import org.iq80.leveldb.impl.Iq80DBFactory;
-import org.iq80.leveldb.memenv.MemEnv;
+import org.mapdb.DB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -291,7 +274,6 @@ class TripleStore implements Closeable {
                 logger.debug("Initializing new index '{}'...", fieldSeq);
 
                 TripleIndex addedIndex = new TripleIndex(fieldSeq);
-                DB addedDB = null;
                 RecordIterator sourceIter = null;
                 try {
                     sourceIter = new DBRecordIterator(sourceIndex.map.keySet().iterator());
@@ -300,14 +282,8 @@ class TripleStore implements Closeable {
                         addedIndex.put(value, EMPTY);
                     }
                 } finally {
-                    try {
-                        if (sourceIter != null) {
-                            sourceIter.close();
-                        }
-                    } finally {
-                        if (addedDB != null) {
-                            //addedDB.sync();
-                        }
+                    if (sourceIter != null) {
+                        sourceIter.close();
                     }
                 }
 
@@ -890,7 +866,7 @@ class TripleStore implements Closeable {
     /**
      * A DBComparator that can be used to create indexes with a configurable order of the subject, predicate, object and context fields.
      */
-    private static class TripleComparator implements DBComparator {
+    private static class TripleComparator implements Comparator<byte[]> {
 
         private final char[] fieldSeq;
 
@@ -903,6 +879,10 @@ class TripleStore implements Closeable {
         }
 
         public int compare(byte[] key1, byte[] key2) {
+            if (key1 == null || key2 == null) {
+                return 0;
+            }
+
             for (char field : fieldSeq) {
                 int fieldIdx = 0;
 
@@ -947,14 +927,12 @@ class TripleStore implements Closeable {
         }
     }
 
-    private Env memEnv = null; //MemEnv.createEnv();
-
     private class TripleIndex {
 
         private final TripleComparator tripleComparator;
         private final String fieldSeq;
 
-        private TreeMap<byte[], byte[]> map;
+        private BTreeMap<byte[], byte[]> map;
         private WeakHashMap<KeyIterator, Boolean> iterators = new WeakHashMap<>();
 
         public TripleIndex(String fieldSeq) throws IOException {
@@ -964,7 +942,7 @@ class TripleStore implements Closeable {
         }
 
         private void open() throws IOException {
-            map = new TreeMap<>(tripleComparator);
+            map = BTreeMap.create(tripleComparator);
         }
 
         private String getFilenamePrefix(String fieldSeq) {

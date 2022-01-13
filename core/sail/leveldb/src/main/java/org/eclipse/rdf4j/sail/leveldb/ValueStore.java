@@ -7,12 +7,14 @@
  *******************************************************************************/
 package org.eclipse.rdf4j.sail.leveldb;
 
+import uk.co.omegaprime.btreemap.BTreeMap;
 import java.io.File;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.zip.CRC32;
 
@@ -35,15 +37,6 @@ import org.eclipse.rdf4j.sail.leveldb.model.NativeIRI;
 import org.eclipse.rdf4j.sail.leveldb.model.NativeLiteral;
 import org.eclipse.rdf4j.sail.leveldb.model.NativeResource;
 import org.eclipse.rdf4j.sail.leveldb.model.NativeValue;
-import org.iq80.leveldb.CompressionType;
-import org.iq80.leveldb.DB;
-import org.iq80.leveldb.DBIterator;
-import org.iq80.leveldb.Options;
-import org.iq80.leveldb.WriteBatch;
-import org.iq80.leveldb.env.Env;
-import org.iq80.leveldb.impl.DbImpl;
-import org.iq80.leveldb.impl.Iq80DBFactory;
-import org.iq80.leveldb.memenv.MemEnv;
 
 /**
  * File-based indexed storage and retrieval of RDF values. ValueStore maps RDF values to integer IDs and vice-versa.
@@ -123,9 +116,7 @@ class ValueStore extends AbstractValueFactory {
     /**
      * Used to do the actual storage of values, once they're translated to byte arrays.
      */
-    private DB db;
-    private Env memEnv = null; //MemEnv.createEnv();
-    private WriteBatch writeBatch;
+    private BTreeMap<byte[], byte[]> map;
 
     /**
      * An object that indicates the revision of the value store, which is used to check if cached value IDs are still valid. In order to be
@@ -161,11 +152,9 @@ class ValueStore extends AbstractValueFactory {
 
         setNewRevision();
         // read maximum id from store
-        try (DBIterator it = db.iterator()) {
-            it.seek(new byte[]{ID_KEY, (byte) 0xFF});
-            if (it.hasPrev()) {
-                nextId = data2id(it.prev().getKey()) + 1;
-            }
+        byte[] maxId = map.navigableKeySet().isEmpty() ? null : map.navigableKeySet().last();
+        if (maxId != null) {
+            nextId = data2id(maxId);
         }
     }
 
@@ -175,7 +164,7 @@ class ValueStore extends AbstractValueFactory {
 
         int maxID = (int) valueStore.nextId - 1;
         for (int id = 1; id <= maxID; id++) {
-            byte[] data = valueStore.db.get(valueStore.id2data(id));
+            byte[] data = valueStore.map.get(valueStore.id2data(id));
             if (valueStore.isNamespaceData(data)) {
                 String ns = valueStore.data2namespace(data);
                 System.out.println("[" + id + "] " + ns);
@@ -191,31 +180,18 @@ class ValueStore extends AbstractValueFactory {
      *---------*/
 
     public void startTransaction() throws IOException {
-        writeBatch = db.createWriteBatch();
     }
 
     public void commit() throws IOException {
-        db.write(writeBatch);
-        writeBatch = null;
     }
 
     private void open() throws IOException {
-        File dbDir = new File(dataDir, FILENAME_PREFIX);
-        dbDir.mkdirs();
-
-        Options options = new Options();
-        options.createIfMissing(true);
-
-        if (memEnv == null) {
-            // set compression type
-            options.compressionType(CompressionType.SNAPPY);
-            db = Iq80DBFactory.factory.open(new File(dataDir, FILENAME_PREFIX), options);
-        } else {
-            db = new DbImpl(options, new File(dataDir, FILENAME_PREFIX).toString(), memEnv);
-        }
+        map = BTreeMap.create((a, b) -> {
+            return Arrays.compare(a, b);
+        });
     }
 
-    private long nextId() throws IOException {
+    private long nextId() {
         long result = nextId;
         nextId++;
         return result;
@@ -266,7 +242,7 @@ class ValueStore extends AbstractValueFactory {
 
         if (resultValue == null) {
             // Value not in cache, fetch it from file
-            byte[] data = db.get(id2data(id));
+            byte[] data = map.get(id2data(id));
             if (data != null) {
                 resultValue = data2value(id, data);
 
@@ -279,34 +255,7 @@ class ValueStore extends AbstractValueFactory {
     }
 
     private int findId(byte[] data) {
-        /*
-        long dataHash = hash(data);
-        byte[] hashAndNr = new byte[1 + Long.BYTES * 2];
-        ByteBuffer hashBb = ByteBuffer.wrap(hashAndNr);
-        hashBb.put(HASH_KEY);
-        hashBb.putLong(dataHash);
-        hashBb.putLong(0);
-
-        Integer id = null;
-        try (DBIterator it = db.iterator()) {
-            it.seek(hashAndNr);
-            while (it.hasNext()) {
-                Map.Entry<byte[], byte[]> entry = it.next();
-                if (ByteArrayUtil.compareRegion(entry.getKey(), 0, hashAndNr, 0, 1 + Long.BYTES) != 0) {
-                    break;
-                }
-
-                byte[] idData = entry.getValue();
-                byte[] valueData = db.get(idData);
-                if (Arrays.equals(data, valueData)) {
-                    id = data2id(idData);
-                }
-            }
-        }
-
-        return id != null ? id : NativeValue.UNKNOWN_ID;
-		*/
-        byte[] idData = db.get(data);
+        byte[] idData = map.get(data);
         if (idData != null) {
             return data2id(idData);
         } else {
@@ -315,32 +264,9 @@ class ValueStore extends AbstractValueFactory {
     }
 
     private void storeId(int id, byte[] data) {
-        /*
-		long dataHash = hash(data);
-		byte[] hashAndNr = new byte[1 + Long.BYTES * 2];
-		ByteBuffer hashBb = ByteBuffer.wrap(hashAndNr);
-		hashBb.put(HASH_KEY);
-		hashBb.putLong(dataHash);
-		hashBb.putLong(1 + Long.BYTES, 0);
-
-		long hashNr = 0;
-		try (DBIterator it = db.iterator()) {
-			it.seek(hashAndNr);
-			while (it.hasNext()) {
-				Map.Entry<byte[], byte[]> entry = it.next();
-				if (ByteArrayUtil.compareRegion(entry.getKey(), 0, hashAndNr, 0, 1 + Long.BYTES) != 0) {
-					break;
-				}
-				hashNr++;
-			}
-		}
-		hashBb.putLong(1 + Long.BYTES, hashNr);
         byte[] idData = id2data(id);
-        db.write(db.createWriteBatch().put(hashAndNr, idData).put(idData, data));
-		*/
-        byte[] idData = id2data(id);
-        writeBatch.put(data, idData);
-        writeBatch.put(idData, data);
+        map.put(data, idData);
+        map.put(idData, data);
     }
 
     /**
@@ -459,18 +385,12 @@ class ValueStore extends AbstractValueFactory {
         try {
             Lock writeLock = lockManager.getWriteLock();
             try {
-                if (writeBatch != null) {
-                    writeBatch.close();
-                }
-                db.close();
-                Iq80DBFactory.factory.destroy(new File(dataDir, FILENAME_PREFIX), new Options());
+                map.clear();
 
                 valueCache.clear();
                 valueIDCache.clear();
                 namespaceCache.clear();
                 namespaceIDCache.clear();
-
-                open();
 
                 setNewRevision();
             } finally {
@@ -497,7 +417,7 @@ class ValueStore extends AbstractValueFactory {
      * @throws IOException If an I/O error occurred.
      */
     public void close() throws IOException {
-        db.close();
+        map = null;
     }
 
     /**
@@ -508,7 +428,7 @@ class ValueStore extends AbstractValueFactory {
     public void checkConsistency() throws SailException, IOException {
         int maxID = (int) nextId - 1;
         for (int id = 1; id <= maxID; id++) {
-            byte[] data = db.get(id2data(id));
+            byte[] data = map.get(id2data(id));
             if (isNamespaceData(data)) {
                 String namespace = data2namespace(data);
                 try {
@@ -746,7 +666,7 @@ class ValueStore extends AbstractValueFactory {
         String namespace = namespaceCache.get(cacheID);
 
         if (namespace == null) {
-            byte[] namespaceData = db.get(id2data(id));
+            byte[] namespaceData = map.get(id2data(id));
             namespace = data2namespace(namespaceData);
 
             namespaceCache.put(cacheID, namespace);

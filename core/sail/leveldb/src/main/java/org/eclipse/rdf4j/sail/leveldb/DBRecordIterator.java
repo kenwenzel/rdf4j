@@ -3,8 +3,6 @@ package org.eclipse.rdf4j.sail.leveldb;
 import java.io.IOException;
 import java.util.Iterator;
 
-import org.iq80.leveldb.DBIterator;
-
 public class DBRecordIterator implements RecordIterator {
     final Iterator<byte[]> wrapped;
 

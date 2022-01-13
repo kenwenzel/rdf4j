@@ -10,14 +10,13 @@ package org.eclipse.rdf4j.sail.leveldb;
 import java.io.IOException;
 
 import org.eclipse.rdf4j.sail.NotifyingSail;
-import org.eclipse.rdf4j.sail.SailConcurrencyTest;
 import org.eclipse.rdf4j.sail.SailException;
-import org.eclipse.rdf4j.sail.SailInterruptTest;
+import org.eclipse.rdf4j.testsuite.sail.SailInterruptTest;
 import org.junit.Rule;
 import org.junit.rules.TemporaryFolder;
 
 /**
- * An extension of {@link SailConcurrencyTest} for testing the class {@link NativeStore}.
+ * An extension of {@link SailInterruptTest} for testing the class {@link NativeStore}.
  */
 public class NativeStoreInterruptTest extends SailInterruptTest {
 

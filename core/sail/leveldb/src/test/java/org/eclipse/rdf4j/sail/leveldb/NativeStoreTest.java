@@ -8,7 +8,6 @@
 package org.eclipse.rdf4j.sail.leveldb;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.io.File;
@@ -18,8 +17,9 @@ import org.assertj.core.util.Files;
 import org.eclipse.rdf4j.model.vocabulary.RDF;
 import org.eclipse.rdf4j.query.QueryResults;
 import org.eclipse.rdf4j.sail.NotifyingSail;
-import org.eclipse.rdf4j.sail.RDFNotifyingStoreTest;
 import org.eclipse.rdf4j.sail.SailException;
+import org.eclipse.rdf4j.testsuite.sail.RDFNotifyingStoreTest;
+import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -59,14 +59,14 @@ public class NativeStoreTest extends RDFNotifyingStoreTest {
 		con.begin();
 		con.setNamespace("rdf", RDF.NAMESPACE);
 		con.commit();
-		assertEquals(RDF.NAMESPACE, con.getNamespace("rdf"));
+		Assert.assertEquals(RDF.NAMESPACE, con.getNamespace("rdf"));
 
 		con.close();
 		sail.shutDown();
 		sail.init();
 		con = sail.getConnection();
 
-		assertEquals(RDF.NAMESPACE, con.getNamespace("rdf"));
+		Assert.assertEquals(RDF.NAMESPACE, con.getNamespace("rdf"));
 	}
 
 	@Test

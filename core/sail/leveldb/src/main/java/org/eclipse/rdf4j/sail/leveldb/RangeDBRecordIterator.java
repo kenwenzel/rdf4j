@@ -1,15 +1,14 @@
 package org.eclipse.rdf4j.sail.leveldb;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.Iterator;
 
 import org.eclipse.rdf4j.common.io.ByteArrayUtil;
-import org.iq80.leveldb.DBComparator;
-import org.iq80.leveldb.DBIterator;
 
 public class RangeDBRecordIterator implements RecordIterator {
 
-    private final DBComparator comparator;
+    private final Comparator<byte[]> comparator;
 
     private final Iterator<byte[]> wrapped;
 
@@ -21,7 +20,7 @@ public class RangeDBRecordIterator implements RecordIterator {
 
     private final byte[] maxValue;
 
-    public RangeDBRecordIterator(DBComparator comparator, Iterator<byte[]> wrapped,
+    public RangeDBRecordIterator(Comparator<byte[]> comparator, Iterator<byte[]> wrapped,
         byte[] searchKey, byte[] searchMask, byte[] minValue, byte[] maxValue) {
         this.comparator = comparator;
         this.wrapped = wrapped;

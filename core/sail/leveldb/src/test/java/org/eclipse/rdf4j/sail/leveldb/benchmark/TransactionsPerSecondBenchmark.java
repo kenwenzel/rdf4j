@@ -43,7 +43,7 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 @State(Scope.Benchmark)
 @Warmup(iterations = 2)
 @BenchmarkMode({ Mode.Throughput })
-@Fork(value = 1, jvmArgs = { "-Xms1G", "-Xmx1G", "-XX:+UseG1GC" })
+@Fork(value = 0, jvmArgs = { "-Xms1G", "-Xmx1G", "-XX:+UseG1GC" })
 //@Fork(value = 1, jvmArgs = {"-Xms8G", "-Xmx8G", "-XX:+UseG1GC", "-XX:+UnlockCommercialFeatures", "-XX:StartFlightRecording=delay=60s,duration=120s,filename=recording.jfr,settings=profile", "-XX:FlightRecorderOptions=samplethreads=true,stackdepth=1024", "-XX:+UnlockDiagnosticVMOptions", "-XX:+DebugNonSafepoints"})
 @Measurement(iterations = 2)
 @OutputTimeUnit(TimeUnit.SECONDS)
@@ -59,7 +59,7 @@ public class TransactionsPerSecondBenchmark {
 		Options opt = new OptionsBuilder()
 				.include("TransactionsPerSecondBenchmark") // adapt to control which benchmark tests to run
 				// .addProfiler("stack", "lines=20;period=1;top=20")
-				.forks(1)
+				.forks(0)
 				.build();
 
 		new Runner(opt).run();
