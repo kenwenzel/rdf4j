@@ -15,14 +15,14 @@ public class RangeDBRecordIterator implements RecordIterator {
 
     private final long[] searchKey;
 
-    private final long[] searchMask;
+    private final boolean[] searchMask;
 
     private final long[] minValue;
 
     private final long[] maxValue;
 
     public RangeDBRecordIterator(Comparator<long[]> comparator, Iterator<Entry<long[], Boolean>> wrapped,
-        long[] searchKey, long[] searchMask, long[] minValue, long[] maxValue) {
+        long[] searchKey, boolean[] searchMask, long[] minValue, long[] maxValue) {
         this.comparator = comparator;
         this.wrapped = wrapped;
         this.searchKey = searchKey;
@@ -51,9 +51,9 @@ public class RangeDBRecordIterator implements RecordIterator {
         return null;
     }
 
-    static boolean matchesPattern(long[] value, long[] mask, long[] pattern) {
+    static boolean matchesPattern(long[] value, boolean[] mask, long[] pattern) {
         for (int i = 0; i < value.length; i++) {
-            if (((value[i] ^ pattern[i]) & mask[i]) != 0) {
+            if (mask[i] && value[i] != pattern[i]) {
                 return false;
             }
         }

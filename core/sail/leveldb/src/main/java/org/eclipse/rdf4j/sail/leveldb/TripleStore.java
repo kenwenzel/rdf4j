@@ -7,33 +7,19 @@
  *******************************************************************************/
 package org.eclipse.rdf4j.sail.leveldb;
 
-import uk.co.omegaprime.btreemap.BTreeMap;
 import java.io.Closeable;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Properties;
 import java.util.Set;
 import java.util.StringTokenizer;
-import java.util.TreeMap;
-import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
-import org.eclipse.rdf4j.common.io.ByteArrayUtil;
 import org.eclipse.rdf4j.sail.SailException;
-import org.mapdb.DB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -149,7 +135,7 @@ class TripleStore implements Closeable {
 
     private RecordIterator getTriplesUsingIndex(long subj, long pred, long obj, long context, TripleIndex index, boolean rangeSearch, boolean explicit) {
         long[] searchKey = getSearchKey(subj, pred, obj, context);
-        long[] searchMask = getSearchMask(subj, pred, obj, context);
+        boolean[] searchMask = getSearchMask(subj, pred, obj, context);
 
         if (rangeSearch) {
             // Use ranged search
@@ -276,23 +262,8 @@ class TripleStore implements Closeable {
         return getData(subj, pred, obj, context);
     }
 
-    private long[] getSearchMask(long subj, long pred, long obj, long context) {
-        long[] mask = new long[RECORD_LENGTH];
-
-        if (subj != -1) {
-            mask[SUBJ_IDX] = Long.MAX_VALUE;
-        }
-        if (pred != -1) {
-            mask[PRED_IDX] = Long.MAX_VALUE;
-        }
-        if (obj != -1) {
-            mask[OBJ_IDX] = Long.MAX_VALUE;
-        }
-        if (context != -1) {
-            mask[CONTEXT_IDX] = Long.MAX_VALUE;
-        }
-
-        return mask;
+    private boolean[] getSearchMask(long subj, long pred, long obj, long context) {
+        return new boolean[] {subj != -1, pred != -1, obj != -1, context != -1};
     }
 
     private long[] getMinValue(long subj, long pred, long obj, long context) {

@@ -88,7 +88,7 @@ class ValueStore extends AbstractValueFactory {
      * Constructors *
      *--------------*/
 
-    public ValueStore() throws IOException {
+    public ValueStore() {
         valueCache = new ConcurrentHashMap<>();
         valueIDCache = new ConcurrentHashMap<>();
 
