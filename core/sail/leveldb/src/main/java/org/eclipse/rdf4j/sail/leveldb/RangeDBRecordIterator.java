@@ -37,11 +37,7 @@ public class RangeDBRecordIterator implements RecordIterator {
         while (wrapped.hasNext()) {
             Entry<NativeValue[], Boolean> value = wrapped.next();
             NativeValue[] key = value.getKey();
-            if (maxValue != null && comparator.compare(maxValue, key) < 0) {
-                // Reached maximum value, stop iterating
-                close();
-                return null;
-            } else if (searchKey != null && !matchesPattern(key, searchMask, searchKey)) {
+            if (searchKey != null && !matchesPattern(key, searchMask, searchKey)) {
                 // Value doesn't match search key/mask
                 continue;
             } else {

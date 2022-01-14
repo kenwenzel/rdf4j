@@ -145,7 +145,7 @@ class TripleStore implements Closeable {
             NativeValue[] maxValue = getMaxValue(subj, pred, obj, context);
 
             return new RangeDBRecordIterator(index.tripleComparator,
-                index.getMap(explicit).tailMap(minValue).entrySet().iterator(),
+                index.getMap(explicit).subMap(minValue, maxValue).entrySet().iterator(),
                 searchKey, searchMask, minValue, maxValue);
         } else {
             // Use sequential scan
@@ -229,17 +229,23 @@ class TripleStore implements Closeable {
     private Map<NativeValue, Long> removeTriples(RecordIterator iter, boolean explicit) throws IOException {
         final Map<NativeValue, Long> perContextCounts = new HashMap<>();
 
+        List<NativeValue[]> keys = new ArrayList<>();
         try {
             Record r;
             while ((r = iter.next()) != null) {
-                for (TripleIndex index : indexes) {
-                    index.getMap(explicit).remove(r.key);
-                }
+                keys.add(r.key);
                 NativeValue context = r.key[CONTEXT_IDX];
                 perContextCounts.merge(context, 1L, (c, one) -> c + one);
             }
         } finally {
             iter.close();
+        }
+
+        for (TripleIndex index : indexes) {
+            ConcurrentSkipListMap<NativeValue[], Boolean> map = index.getMap(explicit);
+            for (NativeValue[] key : keys) {
+                map.remove(key);
+            }
         }
 
         return perContextCounts;
@@ -309,10 +315,6 @@ class TripleStore implements Closeable {
         }
 
         public int compare(NativeValue[] key1, NativeValue[] key2) {
-            if (key1 == null || key2 == null) {
-                return 0;
-            }
-
             for (char field : fieldSeq) {
                 int fieldIdx = 0;
 
