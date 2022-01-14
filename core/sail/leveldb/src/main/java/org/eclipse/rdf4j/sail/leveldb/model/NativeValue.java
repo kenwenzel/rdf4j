@@ -14,6 +14,8 @@ public interface NativeValue extends Value {
 
 	long UNKNOWN_ID = -1;
 
+	NativeValue NULL = new NativeValueBase(0);
+
 	/**
 	 * Sets the ID that is used for this value in a specific revision of the value store.
 	 */

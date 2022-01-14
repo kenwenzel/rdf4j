@@ -7,7 +7,6 @@
  *******************************************************************************/
 package org.eclipse.rdf4j.sail.leveldb;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.ByteOrder;
 import java.util.concurrent.ConcurrentHashMap;
@@ -16,10 +15,8 @@ import java.util.concurrent.ConcurrentMap;
 import org.eclipse.rdf4j.common.concurrent.locks.Lock;
 import org.eclipse.rdf4j.common.concurrent.locks.ReadWriteLockManager;
 import org.eclipse.rdf4j.common.concurrent.locks.WritePrefReadWriteLockManager;
-import org.eclipse.rdf4j.model.BNode;
 import org.eclipse.rdf4j.model.IRI;
 import org.eclipse.rdf4j.model.Literal;
-import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.model.base.AbstractValueFactory;
 import org.eclipse.rdf4j.model.util.Literals;
@@ -27,7 +24,6 @@ import org.eclipse.rdf4j.model.vocabulary.XSD;
 import org.eclipse.rdf4j.sail.leveldb.model.NativeBNode;
 import org.eclipse.rdf4j.sail.leveldb.model.NativeIRI;
 import org.eclipse.rdf4j.sail.leveldb.model.NativeLiteral;
-import org.eclipse.rdf4j.sail.leveldb.model.NativeResource;
 import org.eclipse.rdf4j.sail.leveldb.model.NativeValue;
 
 /**
@@ -125,7 +121,23 @@ class ValueStore extends AbstractValueFactory {
         return lockManager.getReadLock();
     }
 
-   public NativeValue getOwnValue(Value value) throws IOException {
+    public NativeValue getKnownValue(Value value) {
+        // Try to get the internal ID from the value itself
+        boolean isOwnValue = isOwnValue(value);
+
+        if (isOwnValue) {
+            NativeValue nativeValue = (NativeValue) value;
+
+            if (revisionIsCurrent(nativeValue) && nativeValue.getInternalID() != NativeValue.UNKNOWN_ID) {
+                return nativeValue;
+            }
+        }
+
+        return valueCache.get(value);
+    }
+
+
+    public NativeValue getOwnValue(Value value) throws IOException {
         // Try to get the internal ID from the value itself
         boolean isOwnValue = isOwnValue(value);
 
@@ -149,20 +161,30 @@ class ValueStore extends AbstractValueFactory {
      * @throws IOException If an I/O error occurred.
      */
     public NativeValue storeValue(Value value) throws IOException {
-        NativeValue ownValue = getOwnValue(value);
+        boolean isOwnValue = isOwnValue(value);
 
-        if (ownValue == null || ownValue.getInternalID() == NativeValue.UNKNOWN_ID) {
-            long id = nextId();
+        NativeValue nativeValue;
+        if (isOwnValue) {
+            nativeValue = (NativeValue) value;
 
-            NativeValue nv = isOwnValue(value) ? (NativeValue) value : getNativeValue(value);
-            // Store id in value for fast access in any consecutive calls
-            nv.setInternalID(id, revision);
-            ownValue = nv;
-
-            valueCache.put(nv, nv);
+            if (revisionIsCurrent(nativeValue) && nativeValue.getInternalID() != NativeValue.UNKNOWN_ID) {
+                return nativeValue;
+            }
         }
 
-        return ownValue;
+        nativeValue = valueCache.get(value);
+        if (nativeValue != null) {
+            return nativeValue;
+        }
+
+        long id = nextId();
+
+        NativeValue nv = isOwnValue(value) ? (NativeValue) value : copy(value);
+        // Store id in value for fast access in any consecutive calls
+        nv.setInternalID(id, revision);
+        valueCache.put(nv, nv);
+
+        return nv;
     }
 
     /**
@@ -203,7 +225,7 @@ class ValueStore extends AbstractValueFactory {
     public void close() throws IOException {
     }
 
-    private Value copy(Value value) {
+    private NativeValue copy(Value value) {
         if (value instanceof IRI) {
             return createIRI(value.stringValue());
         } else if (value instanceof Literal) {
@@ -264,76 +286,5 @@ class ValueStore extends AbstractValueFactory {
     @Override
     public NativeLiteral createLiteral(String value, IRI datatype) {
         return new NativeLiteral(revision, value, datatype);
-    }
-
-    public NativeValue getNativeValue(Value value) {
-        if (value instanceof Resource) {
-            return getNativeResource((Resource) value);
-        } else if (value instanceof Literal) {
-            return getNativeLiteral((Literal) value);
-        } else {
-            throw new IllegalArgumentException("Unknown value type: " + value.getClass());
-        }
-    }
-
-    public NativeResource getNativeResource(Resource resource) {
-        if (resource instanceof IRI) {
-            return getNativeURI((IRI) resource);
-        } else if (resource instanceof BNode) {
-            return getNativeBNode((BNode) resource);
-        } else {
-            throw new IllegalArgumentException("Unknown resource type: " + resource.getClass());
-        }
-    }
-
-    /**
-     * Creates a NativeURI that is equal to the supplied URI. This method returns the supplied URI itself if it is already a NativeURI that
-     * has been created by this ValueStore, which prevents unnecessary object creations.
-     *
-     * @return A NativeURI for the specified URI.
-     */
-    public NativeIRI getNativeURI(IRI uri) {
-        if (isOwnValue(uri)) {
-            return (NativeIRI) uri;
-        }
-
-        return new NativeIRI(revision, uri.toString());
-    }
-
-    /**
-     * Creates a NativeBNode that is equal to the supplied bnode. This method returns the supplied bnode itself if it is already a
-     * NativeBNode that has been created by this ValueStore, which prevents unnecessary object creations.
-     *
-     * @return A NativeBNode for the specified bnode.
-     */
-    public NativeBNode getNativeBNode(BNode bnode) {
-        if (isOwnValue(bnode)) {
-            return (NativeBNode) bnode;
-        }
-
-        return new NativeBNode(revision, bnode.getID());
-    }
-
-    /*--------------------*
-     * Test/debug methods *
-     *--------------------*/
-
-    /**
-     * Creates an NativeLiteral that is equal to the supplied literal. This method returns the supplied literal itself if it is already a
-     * NativeLiteral that has been created by this ValueStore, which prevents unnecessary object creations.
-     *
-     * @return A NativeLiteral for the specified literal.
-     */
-    public NativeLiteral getNativeLiteral(Literal l) {
-        if (isOwnValue(l)) {
-            return (NativeLiteral) l;
-        }
-
-        if (Literals.isLanguageLiteral(l)) {
-            return new NativeLiteral(revision, l.getLabel(), l.getLanguage().get());
-        } else {
-            NativeIRI datatype = getNativeURI(l.getDatatype());
-            return new NativeLiteral(revision, l.getLabel(), datatype);
-        }
     }
 }

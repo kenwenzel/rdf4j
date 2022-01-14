@@ -268,7 +268,7 @@ class TripleStore implements Closeable {
         return new boolean[] {subj != null, pred != null, obj != null, context != null};
     }
 
-    private final NativeValue MIN_VALUE = new NativeValueBase(0);
+    private final NativeValue MIN_VALUE = NativeValue.NULL;
     private final NativeValue MAX_VALUE = new NativeValueBase(Long.MAX_VALUE);
 
     private NativeValue[] getMinValue(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context) {

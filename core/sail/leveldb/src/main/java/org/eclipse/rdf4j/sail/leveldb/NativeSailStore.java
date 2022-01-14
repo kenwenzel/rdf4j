@@ -162,9 +162,9 @@ class NativeSailStore implements SailStore {
 		List<NativeValue> contextIDs = new ArrayList<>(contextSet.size());
 		for (Resource context : contextSet) {
 			if (context == null) {
-				contextIDs.add(new NativeValueBase(0));
+				contextIDs.add(NativeValue.NULL);
 			} else {
-				NativeValue contextID = valueStore.getOwnValue(context);
+				NativeValue contextID = valueStore.getKnownValue(context);
 				if (contextID != null) {
 					contextIDs.add(contextID);
 				}
@@ -214,7 +214,7 @@ class NativeSailStore implements SailStore {
 			boolean explicit, Resource... contexts) throws IOException {
 		NativeValue subjID = null;
 		if (subj != null) {
-			subjID = valueStore.getOwnValue(subj);
+			subjID = valueStore.getKnownValue(subj);
 			if (subjID == null) {
 				return new EmptyIteration<>();
 			}
@@ -222,7 +222,7 @@ class NativeSailStore implements SailStore {
 
 		NativeValue predID = null;
 		if (pred != null) {
-			predID = valueStore.getOwnValue(pred);
+			predID = valueStore.getKnownValue(pred);
 			if (predID == null) {
 				return new EmptyIteration<>();
 			}
@@ -230,7 +230,7 @@ class NativeSailStore implements SailStore {
 
 		NativeValue objID = null;
 		if (obj != null) {
-			objID = valueStore.getOwnValue(obj);
+			objID = valueStore.getKnownValue(obj);
 
 			if (objID == null) {
 				return new EmptyIteration<>();
@@ -243,9 +243,9 @@ class NativeSailStore implements SailStore {
 		} else {
 			for (Resource context : contexts) {
 				if (context == null) {
-					contextIDList.add(new NativeValueBase(0));
+					contextIDList.add(NativeValue.NULL);
 				} else {
-					NativeValue contextID = valueStore.getOwnValue(context);
+					NativeValue contextID = valueStore.getKnownValue(context);
 
 					if (contextID != null) {
 						contextIDList.add(contextID);
@@ -272,7 +272,7 @@ class NativeSailStore implements SailStore {
 	double cardinality(Resource subj, IRI pred, Value obj, Resource context) throws IOException {
 		NativeValue subjID = null;
 		if (subj != null) {
-			subjID = valueStore.getOwnValue(subj);
+			subjID = valueStore.getKnownValue(subj);
 			if (subjID == null) {
 				return 0;
 			}
@@ -280,7 +280,7 @@ class NativeSailStore implements SailStore {
 
 		NativeValue predID = null;
 		if (pred != null) {
-			predID = valueStore.getOwnValue(pred);
+			predID = valueStore.getKnownValue(pred);
 			if (predID == null) {
 				return 0;
 			}
@@ -288,7 +288,7 @@ class NativeSailStore implements SailStore {
 
 		NativeValue objID = null;
 		if (obj != null) {
-			objID = valueStore.getOwnValue(obj);
+			objID = valueStore.getKnownValue(obj);
 			if (objID == null) {
 				return 0;
 			}
@@ -296,7 +296,7 @@ class NativeSailStore implements SailStore {
 
 		NativeValue contextID = null;
 		if (context != null) {
-			contextID = valueStore.getOwnValue(context);
+			contextID = valueStore.getKnownValue(context);
 			if (contextID == null) {
 				return 0;
 			}
@@ -475,7 +475,7 @@ class NativeSailStore implements SailStore {
 					if (context != null) {
 						contextID = valueStore.storeValue(context);
 					} else {
-						contextID = new NativeValueBase(0);
+						contextID = NativeValue.NULL;
 					}
 
 					boolean wasNew = tripleStore.storeTriple(subjID, predID, objID, contextID, explicit);
@@ -506,21 +506,21 @@ class NativeSailStore implements SailStore {
 				startTriplestoreTransaction();
 				NativeValue subjID = null;
 				if (subj != null) {
-					subjID = valueStore.getOwnValue(subj);
+					subjID = valueStore.getKnownValue(subj);
 					if (subjID == null) {
 						return 0;
 					}
 				}
 				NativeValue predID = null;
 				if (pred != null) {
-					predID = valueStore.getOwnValue(pred);
+					predID = valueStore.getKnownValue(pred);
 					if (predID == null) {
 						return 0;
 					}
 				}
 				NativeValue objID = null;
 				if (obj != null) {
-					objID = valueStore.getOwnValue(obj);
+					objID = valueStore.getKnownValue(obj);
 					if (objID == null) {
 						return 0;
 					}
@@ -533,9 +533,9 @@ class NativeSailStore implements SailStore {
 					for (int i = 0; i < contexts.length; i++) {
 						Resource context = contexts[i];
 						if (context == null) {
-							contextIds[i] = new NativeValueBase(0);
+							contextIds[i] = NativeValue.NULL;
 						} else {
-							NativeValue id = valueStore.getOwnValue(context);
+							NativeValue id = valueStore.getKnownValue(context);
 							// unknown_id cannot be used (would result in removal from all contexts)
 							contextIds[i] = (id != null) ? id : new NativeValueBase(Long.MIN_VALUE);
 						}
