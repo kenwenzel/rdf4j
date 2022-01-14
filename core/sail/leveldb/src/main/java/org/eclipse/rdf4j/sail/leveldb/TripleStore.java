@@ -20,6 +20,8 @@ import java.util.StringTokenizer;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 import org.eclipse.rdf4j.sail.SailException;
+import org.eclipse.rdf4j.sail.leveldb.model.NativeValue;
+import org.eclipse.rdf4j.sail.leveldb.model.NativeValueBase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -116,7 +118,7 @@ class TripleStore implements Closeable {
     public void close() throws IOException {
     }
 
-    public RecordIterator getTriples(long subj, long pred, long obj, long context, boolean explicit)  {
+    public RecordIterator getTriples(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context, boolean explicit)  {
         TripleIndex index = getBestIndex(subj, pred, obj, context);
         boolean doRangeSearch = index.getPatternScore(subj, pred, obj, context) > 0;
         return getTriplesUsingIndex(subj, pred, obj, context, index, doRangeSearch, explicit);
@@ -126,21 +128,21 @@ class TripleStore implements Closeable {
         for (TripleIndex index : indexes) {
             if (index.getFieldSeq()[0] == 'c') {
                 // found a context-first index
-                return getTriplesUsingIndex(-1, -1, -1, -1, index, false, true);
+                return getTriplesUsingIndex(null, null, null, null, index, false, true);
             }
         }
 
         return null;
     }
 
-    private RecordIterator getTriplesUsingIndex(long subj, long pred, long obj, long context, TripleIndex index, boolean rangeSearch, boolean explicit) {
-        long[] searchKey = getSearchKey(subj, pred, obj, context);
+    private RecordIterator getTriplesUsingIndex(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context, TripleIndex index, boolean rangeSearch, boolean explicit) {
+        NativeValue[] searchKey = getSearchKey(subj, pred, obj, context);
         boolean[] searchMask = getSearchMask(subj, pred, obj, context);
 
         if (rangeSearch) {
             // Use ranged search
-            long[] minValue = getMinValue(subj, pred, obj, context);
-            long[] maxValue = getMaxValue(subj, pred, obj, context);
+            NativeValue[] minValue = getMinValue(subj, pred, obj, context);
+            NativeValue[] maxValue = getMaxValue(subj, pred, obj, context);
 
             return new RangeDBRecordIterator(index.tripleComparator,
                 index.getMap(explicit).tailMap(minValue).entrySet().iterator(),
@@ -153,7 +155,7 @@ class TripleStore implements Closeable {
         }
     }
 
-    protected double cardinality(long subj, long pred, long obj, long context) throws IOException {
+    protected double cardinality(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context) throws IOException {
         TripleIndex index = getBestIndex(subj, pred, obj, context);
 
         double cardinality = 0;
@@ -162,15 +164,15 @@ class TripleStore implements Closeable {
             if (score == 0) {
                 cardinality += index.getMap(explicit).size();
             } else {
-                long[] minValue = getMinValue(subj, pred, obj, context);
-                long[] maxValue = getMaxValue(subj, pred, obj, context);
+                NativeValue[] minValue = getMinValue(subj, pred, obj, context);
+                NativeValue[] maxValue = getMaxValue(subj, pred, obj, context);
                 cardinality += index.getMap(explicit).subMap(minValue, maxValue).size();
             }
         }
         return cardinality;
     }
 
-    protected TripleIndex getBestIndex(long subj, long pred, long obj, long context) {
+    protected TripleIndex getBestIndex(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context) {
         int bestScore = -1;
         TripleIndex bestIndex = null;
 
@@ -191,8 +193,8 @@ class TripleStore implements Closeable {
         }
     }
 
-    public boolean storeTriple(long subj, long pred, long obj, long context, boolean explicit) throws IOException {
-        long[] data = getData(subj, pred, obj, context);
+    public boolean storeTriple(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context, boolean explicit) throws IOException {
+        NativeValue[] data = getData(subj, pred, obj, context);
         boolean foundExplicit = indexes.get(0).getMap(true).get(data) != null;
         boolean foundImplicit = !foundExplicit && indexes.get(0).getMap(false).get(data) != null;
 
@@ -218,14 +220,14 @@ class TripleStore implements Closeable {
      * @return A mapping of each modified context to the number of statements removed in that context.
      * @throws IOException
      */
-    public Map<Long, Long> removeTriplesByContext(long subj, long pred, long obj, long context, boolean explicit)
+    public Map<NativeValue, Long> removeTriplesByContext(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context, boolean explicit)
         throws IOException {
         RecordIterator iter = getTriples(subj, pred, obj, context, explicit);
         return removeTriples(iter, explicit);
     }
 
-    private Map<Long, Long> removeTriples(RecordIterator iter, boolean explicit) throws IOException {
-        final Map<Long, Long> perContextCounts = new HashMap<>();
+    private Map<NativeValue, Long> removeTriples(RecordIterator iter, boolean explicit) throws IOException {
+        final Map<NativeValue, Long> perContextCounts = new HashMap<>();
 
         try {
             Record r;
@@ -233,7 +235,7 @@ class TripleStore implements Closeable {
                 for (TripleIndex index : indexes) {
                     index.getMap(explicit).remove(r.key);
                 }
-                long context = r.key[CONTEXT_IDX];
+                NativeValue context = r.key[CONTEXT_IDX];
                 perContextCounts.merge(context, 1L, (c, one) -> c + one);
             }
         } finally {
@@ -254,36 +256,39 @@ class TripleStore implements Closeable {
             index.commit();
         }
     }
-    private long[] getData(long subj, long pred, long obj, long context) {
-        return new long[] {subj, pred, obj, context};
+    private NativeValue[] getData(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context) {
+        return new NativeValue[] {subj, pred, obj, context};
     }
 
-    private long[] getSearchKey(long subj, long pred, long obj, long context) {
+    private NativeValue[] getSearchKey(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context) {
         return getData(subj, pred, obj, context);
     }
 
-    private boolean[] getSearchMask(long subj, long pred, long obj, long context) {
-        return new boolean[] {subj != -1, pred != -1, obj != -1, context != -1};
+    private boolean[] getSearchMask(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context) {
+        return new boolean[] {subj != null, pred != null, obj != null, context != null};
     }
 
-    private long[] getMinValue(long subj, long pred, long obj, long context) {
-        long[] minValue = new long[RECORD_LENGTH];
+    private final NativeValue MIN_VALUE = new NativeValueBase(0);
+    private final NativeValue MAX_VALUE = new NativeValueBase(Long.MAX_VALUE);
 
-        minValue[SUBJ_IDX] = subj == -1 ? 0x00000000 : subj;
-        minValue[PRED_IDX] = pred == -1 ? 0x00000000 : pred;
-        minValue[OBJ_IDX] = obj == -1 ? 0x00000000 : obj;
-        minValue[CONTEXT_IDX] = context == -1 ? 0x00000000 : context;
+    private NativeValue[] getMinValue(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context) {
+        NativeValue[] minValue = new NativeValue[RECORD_LENGTH];
+
+        minValue[SUBJ_IDX] = subj == null ? MIN_VALUE : subj;
+        minValue[PRED_IDX] = pred == null ? MIN_VALUE : pred;
+        minValue[OBJ_IDX] = obj == null ? MIN_VALUE : obj;
+        minValue[CONTEXT_IDX] = context == null ? MIN_VALUE : context;
 
         return minValue;
     }
 
-    private long[] getMaxValue(long subj, long pred, long obj, long context) {
-        long[] maxValue = new long[RECORD_LENGTH];
+    private NativeValue[] getMaxValue(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context) {
+        NativeValue[] maxValue = new NativeValue[RECORD_LENGTH];
 
-        maxValue[SUBJ_IDX] = subj == -1 ? Long.MAX_VALUE : subj;
-        maxValue[PRED_IDX] = pred == -1 ? Long.MAX_VALUE : pred;
-        maxValue[OBJ_IDX] = obj == -1 ? Long.MAX_VALUE : obj;
-        maxValue[CONTEXT_IDX] = context == -1 ? Long.MAX_VALUE : context;
+        maxValue[SUBJ_IDX] = subj == null ? MAX_VALUE : subj;
+        maxValue[PRED_IDX] = pred == null ? MAX_VALUE : pred;
+        maxValue[OBJ_IDX] = obj == null ? MAX_VALUE : obj;
+        maxValue[CONTEXT_IDX] = context == null ? MAX_VALUE : context;
 
         return maxValue;
     }
@@ -291,7 +296,7 @@ class TripleStore implements Closeable {
     /**
      * A DBComparator that can be used to create indexes with a configurable order of the subject, predicate, object and context fields.
      */
-    private static class TripleComparator implements Comparator<long[]> {
+    private static class TripleComparator implements Comparator<NativeValue[]> {
 
         private final char[] fieldSeq;
 
@@ -303,7 +308,7 @@ class TripleStore implements Closeable {
             return fieldSeq;
         }
 
-        public int compare(long[] key1, long[] key2) {
+        public int compare(NativeValue[] key1, NativeValue[] key2) {
             if (key1 == null || key2 == null) {
                 return 0;
             }
@@ -329,7 +334,7 @@ class TripleStore implements Closeable {
                             "invalid character '" + field + "' in field sequence: " + new String(fieldSeq));
                 }
 
-                int diff = Long.compare(key1[fieldIdx], key2[fieldIdx]);
+                int diff = Long.compare(key1[fieldIdx].getInternalID(), key2[fieldIdx].getInternalID());
 
                 if (diff != 0) {
                     return diff;
@@ -349,7 +354,7 @@ class TripleStore implements Closeable {
         private final TripleComparator tripleComparator;
         private final String fieldSeq;
 
-        private ConcurrentSkipListMap<long[], Boolean> explicit, implicit;
+        private ConcurrentSkipListMap<NativeValue[], Boolean> explicit, implicit;
 
         public TripleIndex(String fieldSeq) {
             this.fieldSeq = fieldSeq;
@@ -371,34 +376,34 @@ class TripleStore implements Closeable {
          * the better the index is suited for matching the pattern. Lowest score is 0, which means that the index will perform a sequential
          * scan.
          */
-        public int getPatternScore(long subj, long pred, long obj, long context) {
+        public int getPatternScore(NativeValue subj, NativeValue pred, NativeValue obj, NativeValue context) {
             int score = 0;
 
             for (char field : tripleComparator.getFieldSeq()) {
                 switch (field) {
                     case 's':
-                        if (subj >= 0) {
+                        if (subj != null) {
                             score++;
                         } else {
                             return score;
                         }
                         break;
                     case 'p':
-                        if (pred >= 0) {
+                        if (pred != null) {
                             score++;
                         } else {
                             return score;
                         }
                         break;
                     case 'o':
-                        if (obj >= 0) {
+                        if (obj != null) {
                             score++;
                         } else {
                             return score;
                         }
                         break;
                     case 'c':
-                        if (context >= 0) {
+                        if (context != null) {
                             score++;
                         } else {
                             return score;
@@ -430,7 +435,7 @@ class TripleStore implements Closeable {
         void commit() {
         }
 
-        ConcurrentSkipListMap<long[], Boolean> getMap(boolean explicit) {
+        ConcurrentSkipListMap<NativeValue[], Boolean> getMap(boolean explicit) {
             return explicit ? this.explicit : this.implicit;
         }
     }

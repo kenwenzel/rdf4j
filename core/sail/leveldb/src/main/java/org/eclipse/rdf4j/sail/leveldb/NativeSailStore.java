@@ -40,6 +40,7 @@ import org.eclipse.rdf4j.sail.base.SailSink;
 import org.eclipse.rdf4j.sail.base.SailSource;
 import org.eclipse.rdf4j.sail.base.SailStore;
 import org.eclipse.rdf4j.sail.leveldb.model.NativeValue;
+import org.eclipse.rdf4j.sail.leveldb.model.NativeValueBase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -150,7 +151,7 @@ class NativeSailStore implements SailStore {
 		return new NativeSailSource(false);
 	}
 
-	List<Long> getContextIDs(Resource... contexts) throws IOException {
+	List<NativeValue> getContextIDs(Resource... contexts) throws IOException {
 		assert contexts.length > 0 : "contexts must not be empty";
 
 		// Filter duplicates
@@ -158,13 +159,13 @@ class NativeSailStore implements SailStore {
 		Collections.addAll(contextSet, contexts);
 
 		// Fetch IDs, filtering unknown resources from the result
-		List<Long> contextIDs = new ArrayList<>(contextSet.size());
+		List<NativeValue> contextIDs = new ArrayList<>(contextSet.size());
 		for (Resource context : contextSet) {
 			if (context == null) {
-				contextIDs.add(0L);
+				contextIDs.add(new NativeValueBase(0));
 			} else {
-				long contextID = valueStore.getID(context);
-				if (contextID != NativeValue.UNKNOWN_ID) {
+				NativeValue contextID = valueStore.getOwnValue(context);
+				if (contextID != null) {
 					contextIDs.add(contextID);
 				}
 			}
@@ -211,42 +212,42 @@ class NativeSailStore implements SailStore {
 	 */
 	CloseableIteration<? extends Statement, SailException> createStatementIterator(Resource subj, IRI pred, Value obj,
 			boolean explicit, Resource... contexts) throws IOException {
-		long subjID = NativeValue.UNKNOWN_ID;
+		NativeValue subjID = null;
 		if (subj != null) {
-			subjID = valueStore.getID(subj);
-			if (subjID == NativeValue.UNKNOWN_ID) {
+			subjID = valueStore.getOwnValue(subj);
+			if (subjID == null) {
 				return new EmptyIteration<>();
 			}
 		}
 
-		long predID = NativeValue.UNKNOWN_ID;
+		NativeValue predID = null;
 		if (pred != null) {
-			predID = valueStore.getID(pred);
-			if (predID == NativeValue.UNKNOWN_ID) {
+			predID = valueStore.getOwnValue(pred);
+			if (predID == null) {
 				return new EmptyIteration<>();
 			}
 		}
 
-		long objID = NativeValue.UNKNOWN_ID;
+		NativeValue objID = null;
 		if (obj != null) {
-			objID = valueStore.getID(obj);
+			objID = valueStore.getOwnValue(obj);
 
-			if (objID == NativeValue.UNKNOWN_ID) {
+			if (objID == null) {
 				return new EmptyIteration<>();
 			}
 		}
 
-		List<Long> contextIDList = new ArrayList<>(contexts.length);
+		List<NativeValue> contextIDList = new ArrayList<>(contexts.length);
 		if (contexts.length == 0) {
-			contextIDList.add(NativeValue.UNKNOWN_ID);
+			contextIDList.add(null);
 		} else {
 			for (Resource context : contexts) {
 				if (context == null) {
-					contextIDList.add(0L);
+					contextIDList.add(new NativeValueBase(0));
 				} else {
-					long contextID = valueStore.getID(context);
+					NativeValue contextID = valueStore.getOwnValue(context);
 
-					if (contextID != NativeValue.UNKNOWN_ID) {
+					if (contextID != null) {
 						contextIDList.add(contextID);
 					}
 				}
@@ -255,7 +256,7 @@ class NativeSailStore implements SailStore {
 
 		ArrayList<NativeStatementIterator> perContextIterList = new ArrayList<>(contextIDList.size());
 
-		for (long contextID : contextIDList) {
+		for (NativeValue contextID : contextIDList) {
 			RecordIterator btreeIter = tripleStore.getTriples(subjID, predID, objID, contextID, explicit);
 
 			perContextIterList.add(new NativeStatementIterator(btreeIter, valueStore));
@@ -269,34 +270,34 @@ class NativeSailStore implements SailStore {
 	}
 
 	double cardinality(Resource subj, IRI pred, Value obj, Resource context) throws IOException {
-		long subjID = NativeValue.UNKNOWN_ID;
+		NativeValue subjID = null;
 		if (subj != null) {
-			subjID = valueStore.getID(subj);
-			if (subjID == NativeValue.UNKNOWN_ID) {
+			subjID = valueStore.getOwnValue(subj);
+			if (subjID == null) {
 				return 0;
 			}
 		}
 
-		long predID = NativeValue.UNKNOWN_ID;
+		NativeValue predID = null;
 		if (pred != null) {
-			predID = valueStore.getID(pred);
-			if (predID == NativeValue.UNKNOWN_ID) {
+			predID = valueStore.getOwnValue(pred);
+			if (predID == null) {
 				return 0;
 			}
 		}
 
-		long objID = NativeValue.UNKNOWN_ID;
+		NativeValue objID = null;
 		if (obj != null) {
-			objID = valueStore.getID(obj);
-			if (objID == NativeValue.UNKNOWN_ID) {
+			objID = valueStore.getOwnValue(obj);
+			if (objID == null) {
 				return 0;
 			}
 		}
 
-		long contextID = NativeValue.UNKNOWN_ID;
+		NativeValue contextID = null;
 		if (context != null) {
-			contextID = valueStore.getID(context);
-			if (contextID == NativeValue.UNKNOWN_ID) {
+			contextID = valueStore.getOwnValue(context);
+			if (contextID == null) {
 				return 0;
 			}
 		}
@@ -461,18 +462,20 @@ class NativeSailStore implements SailStore {
 			sinkStoreAccessLock.lock();
 			try {
 				startTriplestoreTransaction();
-				long subjID = valueStore.storeValue(subj);
-				long predID = valueStore.storeValue(pred);
-				long objID = valueStore.storeValue(obj);
+				NativeValue subjID = valueStore.storeValue(subj);
+				NativeValue predID = valueStore.storeValue(pred);
+				NativeValue objID = valueStore.storeValue(obj);
 
 				if (contexts.length == 0) {
 					contexts = new Resource[] { null };
 				}
 
 				for (Resource context : contexts) {
-					long contextID = 0;
+					NativeValue contextID = null;
 					if (context != null) {
 						contextID = valueStore.storeValue(context);
+					} else {
+						contextID = new NativeValueBase(0);
 					}
 
 					boolean wasNew = tripleStore.storeTriple(subjID, predID, objID, contextID, explicit);
@@ -501,54 +504,53 @@ class NativeSailStore implements SailStore {
 			sinkStoreAccessLock.lock();
 			try {
 				startTriplestoreTransaction();
-				long subjID = NativeValue.UNKNOWN_ID;
+				NativeValue subjID = null;
 				if (subj != null) {
-					subjID = valueStore.getID(subj);
-					if (subjID == NativeValue.UNKNOWN_ID) {
+					subjID = valueStore.getOwnValue(subj);
+					if (subjID == null) {
 						return 0;
 					}
 				}
-				long predID = NativeValue.UNKNOWN_ID;
+				NativeValue predID = null;
 				if (pred != null) {
-					predID = valueStore.getID(pred);
-					if (predID == NativeValue.UNKNOWN_ID) {
+					predID = valueStore.getOwnValue(pred);
+					if (predID == null) {
 						return 0;
 					}
 				}
-				long objID = NativeValue.UNKNOWN_ID;
+				NativeValue objID = null;
 				if (obj != null) {
-					objID = valueStore.getID(obj);
-					if (objID == NativeValue.UNKNOWN_ID) {
+					objID = valueStore.getOwnValue(obj);
+					if (objID == null) {
 						return 0;
 					}
 				}
 
-				final long[] contextIds = new long[contexts.length == 0 ? 1 : contexts.length];
+				final NativeValue[] contextIds = new NativeValue[contexts.length == 0 ? 1 : contexts.length];
 				if (contexts.length == 0) { // remove from all contexts
-					contextIds[0] = NativeValue.UNKNOWN_ID;
+					contextIds[0] = null;
 				} else {
 					for (int i = 0; i < contexts.length; i++) {
 						Resource context = contexts[i];
 						if (context == null) {
-							contextIds[i] = 0;
+							contextIds[i] = new NativeValueBase(0);
 						} else {
-							long id = valueStore.getID(context);
+							NativeValue id = valueStore.getOwnValue(context);
 							// unknown_id cannot be used (would result in removal from all contexts)
-							contextIds[i] = (id != NativeValue.UNKNOWN_ID) ? id : Long.MIN_VALUE;
+							contextIds[i] = (id != null) ? id : new NativeValueBase(Long.MIN_VALUE);
 						}
 					}
 				}
 
 				long removeCount = 0;
-				for (long contextId : contextIds) {
-					Map<Long, Long> result = tripleStore.removeTriplesByContext(subjID, predID, objID, contextId,
+				for (NativeValue contextId : contextIds) {
+					Map<NativeValue, Long> result = tripleStore.removeTriplesByContext(subjID, predID, objID, contextId,
 							explicit);
 
-					for (Entry<Long, Long> entry : result.entrySet()) {
-						Long entryContextId = entry.getKey();
-						if (entryContextId > 0) {
-							Resource modifiedContext = (Resource) valueStore.getValue(entryContextId);
-							contextStore.decrementBy(modifiedContext, entry.getValue());
+					for (Entry<NativeValue, Long> entry : result.entrySet()) {
+						NativeValue entryContextId = entry.getKey();
+						if (entryContextId.getInternalID() != 0) {
+							contextStore.decrementBy((Resource)entryContextId, entry.getValue());
 						}
 						removeCount += entry.getValue();
 					}

@@ -69,11 +69,7 @@ class ValueStore extends AbstractValueFactory {
     /**
      * A simple cache containing the [VALUE_CACHE_SIZE] most-recently used values stored by their ID.
      */
-    private final ConcurrentMap<Long, NativeValue> valueCache;
-    /**
-     * A simple cache containing the [ID_CACHE_SIZE] most-recently used value-IDs stored by their value.
-     */
-    private final ConcurrentMap<NativeValue, Long> valueIDCache;
+    private final ConcurrentMap<Value, NativeValue> valueCache;
     /**
      * An object that indicates the revision of the value store, which is used to check if cached value IDs are still valid. In order to be
      * valid, the ValueStoreRevision object of a NativeValue needs to be equal to this object.
@@ -90,7 +86,6 @@ class ValueStore extends AbstractValueFactory {
 
     public ValueStore() {
         valueCache = new ConcurrentHashMap<>();
-        valueIDCache = new ConcurrentHashMap<>();
 
         setNewRevision();
     }
@@ -130,25 +125,7 @@ class ValueStore extends AbstractValueFactory {
         return lockManager.getReadLock();
     }
 
-    /**
-     * Gets the value for the specified ID.
-     *
-     * @param id A value ID.
-     * @return The value for the ID, or <tt>null</tt> no such value could be found.
-     * @throws IOException If an I/O error occurred.
-     */
-    public NativeValue getValue(long id) throws IOException {
-        return valueCache.get(id);
-    }
-
-    /**
-     * Gets the ID for the specified value.
-     *
-     * @param value A value.
-     * @return The ID for the specified value, or {@link NativeValue#UNKNOWN_ID} if no such ID could be found.
-     * @throws IOException If an I/O error occurred.
-     */
-    public long getID(Value value) throws IOException {
+   public NativeValue getOwnValue(Value value) throws IOException {
         // Try to get the internal ID from the value itself
         boolean isOwnValue = isOwnValue(value);
 
@@ -156,16 +133,11 @@ class ValueStore extends AbstractValueFactory {
             NativeValue nativeValue = (NativeValue) value;
 
             if (revisionIsCurrent(nativeValue)) {
-                long id = nativeValue.getInternalID();
-
-                if (id != NativeValue.UNKNOWN_ID) {
-                    return id;
-                }
+                return nativeValue;
             }
         }
 
-        Long id = valueIDCache.get(value);
-        return id != null ? id : NativeValue.UNKNOWN_ID;
+        return valueCache.get(value);
     }
 
     /**
@@ -176,21 +148,21 @@ class ValueStore extends AbstractValueFactory {
      * @return The ID that has been assigned to the value.
      * @throws IOException If an I/O error occurred.
      */
-    public long storeValue(Value value) throws IOException {
-        long id = getID(value);
+    public NativeValue storeValue(Value value) throws IOException {
+        NativeValue ownValue = getOwnValue(value);
 
-        if (id == NativeValue.UNKNOWN_ID) {
-            id = nextId();
+        if (ownValue == null || ownValue.getInternalID() == NativeValue.UNKNOWN_ID) {
+            long id = nextId();
 
             NativeValue nv = isOwnValue(value) ? (NativeValue) value : getNativeValue(value);
             // Store id in value for fast access in any consecutive calls
             nv.setInternalID(id, revision);
+            ownValue = nv;
 
-            valueCache.put(id, nv);
-            valueIDCache.put(nv, id);
+            valueCache.put(nv, nv);
         }
 
-        return id;
+        return ownValue;
     }
 
     /**
@@ -203,7 +175,6 @@ class ValueStore extends AbstractValueFactory {
             Lock writeLock = lockManager.getWriteLock();
             try {
                 valueCache.clear();
-                valueIDCache.clear();
 
                 setNewRevision();
             } finally {

@@ -16,6 +16,7 @@ import org.eclipse.rdf4j.model.Resource;
 import org.eclipse.rdf4j.model.Statement;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.sail.SailException;
+import org.eclipse.rdf4j.sail.leveldb.model.NativeValue;
 
 /**
  * A statement iterator that wraps a RecordIterator containing statement records and translates these records to
@@ -56,23 +57,13 @@ class NativeStatementIterator extends LookAheadIteration<Statement, SailExceptio
 				return null;
 			}
 
-			long[] nextValue = record.key;
-			int subjID = (int)nextValue[TripleStore.SUBJ_IDX];
-			Resource subj = (Resource) valueStore.getValue(subjID);
-
-			int predID = (int)nextValue[TripleStore.PRED_IDX];
-			IRI pred = (IRI) valueStore.getValue(predID);
-
-			int objID = (int)nextValue[TripleStore.OBJ_IDX];
-			Value obj = valueStore.getValue(objID);
-
-			Resource context = null;
-			int contextID = (int)nextValue[TripleStore.CONTEXT_IDX];
-			if (contextID != 0) {
-				context = (Resource) valueStore.getValue(contextID);
+			NativeValue[] nextValue = record.key;
+			NativeValue context = nextValue[TripleStore.CONTEXT_IDX];
+			if (context.getInternalID() == 0) {
+				context = null;
 			}
-
-			return valueStore.createStatement(subj, pred, obj, context);
+			return valueStore.createStatement((Resource) nextValue[TripleStore.SUBJ_IDX], (IRI)nextValue[TripleStore.PRED_IDX],
+				nextValue[TripleStore.OBJ_IDX], (Resource) context);
 		} catch (IOException e) {
 			throw causeIOException(e);
 		}

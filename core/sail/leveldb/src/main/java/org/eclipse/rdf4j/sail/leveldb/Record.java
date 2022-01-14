@@ -12,15 +12,17 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import org.eclipse.rdf4j.sail.leveldb.model.NativeValue;
+
 /**
  * A record in the triple store.
  *
  */
 public class Record {
-	final long[] key;
+	final NativeValue[] key;
 	final boolean val;
 
-	public Record(long[] key, boolean val) {
+	public Record(NativeValue[] key, boolean val) {
 		this.key = key;
 		this.val = val;
 	}

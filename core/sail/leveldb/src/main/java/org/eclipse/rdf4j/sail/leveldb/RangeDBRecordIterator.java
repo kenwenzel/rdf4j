@@ -6,23 +6,24 @@ import java.util.Iterator;
 import java.util.Map.Entry;
 
 import org.eclipse.rdf4j.common.io.ByteArrayUtil;
+import org.eclipse.rdf4j.sail.leveldb.model.NativeValue;
 
 public class RangeDBRecordIterator implements RecordIterator {
 
-    private final Comparator<long[]> comparator;
+    private final Comparator<NativeValue[]> comparator;
 
-    private final Iterator<Entry<long[], Boolean>> wrapped;
+    private final Iterator<Entry<NativeValue[], Boolean>> wrapped;
 
-    private final long[] searchKey;
+    private final NativeValue[] searchKey;
 
     private final boolean[] searchMask;
 
-    private final long[] minValue;
+    private final NativeValue[] minValue;
 
-    private final long[] maxValue;
+    private final NativeValue[] maxValue;
 
-    public RangeDBRecordIterator(Comparator<long[]> comparator, Iterator<Entry<long[], Boolean>> wrapped,
-        long[] searchKey, boolean[] searchMask, long[] minValue, long[] maxValue) {
+    public RangeDBRecordIterator(Comparator<NativeValue[]> comparator, Iterator<Entry<NativeValue[], Boolean>> wrapped,
+        NativeValue[] searchKey, boolean[] searchMask, NativeValue[] minValue, NativeValue[] maxValue) {
         this.comparator = comparator;
         this.wrapped = wrapped;
         this.searchKey = searchKey;
@@ -34,8 +35,8 @@ public class RangeDBRecordIterator implements RecordIterator {
     @Override
     public Record next() throws IOException {
         while (wrapped.hasNext()) {
-            Entry<long[], Boolean> value = wrapped.next();
-            long[] key = value.getKey();
+            Entry<NativeValue[], Boolean> value = wrapped.next();
+            NativeValue[] key = value.getKey();
             if (maxValue != null && comparator.compare(maxValue, key) < 0) {
                 // Reached maximum value, stop iterating
                 close();
@@ -51,9 +52,9 @@ public class RangeDBRecordIterator implements RecordIterator {
         return null;
     }
 
-    static boolean matchesPattern(long[] value, boolean[] mask, long[] pattern) {
+    static boolean matchesPattern(NativeValue[] value, boolean[] mask, NativeValue[] pattern) {
         for (int i = 0; i < value.length; i++) {
-            if (mask[i] && value[i] != pattern[i]) {
+            if (mask[i] && value[i].getInternalID() != pattern[i].getInternalID()) {
                 return false;
             }
         }
