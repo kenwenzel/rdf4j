@@ -69,22 +69,4 @@ public class NativeStoreTest extends RDFNotifyingStoreTest {
 		Assert.assertEquals(RDF.NAMESPACE, con.getNamespace("rdf"));
 	}
 
-	@Test
-	public void testContextCacheReconstruction() throws Exception {
-		con.begin();
-		con.addStatement(RDF.TYPE, RDF.TYPE, RDF.TYPE, RDF.ALT);
-		con.commit();
-		con.close();
-		sail.shutDown();
-
-		File contextFile = new File(dataDir, "/contexts.dat");
-		Files.delete(contextFile);
-
-		sail.init();
-		con = sail.getConnection();
-
-		assertTrue(contextFile.exists());
-		assertThat(QueryResults.asList(con.getContextIDs()).size()).isEqualTo(1);
-	}
-
 }

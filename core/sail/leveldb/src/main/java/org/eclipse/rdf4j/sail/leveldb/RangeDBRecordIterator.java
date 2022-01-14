@@ -3,25 +3,26 @@ package org.eclipse.rdf4j.sail.leveldb;
 import java.io.IOException;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.Map.Entry;
 
 import org.eclipse.rdf4j.common.io.ByteArrayUtil;
 
 public class RangeDBRecordIterator implements RecordIterator {
 
-    private final Comparator<byte[]> comparator;
+    private final Comparator<long[]> comparator;
 
-    private final Iterator<byte[]> wrapped;
+    private final Iterator<Entry<long[], Boolean>> wrapped;
 
-    private final byte[] searchKey;
+    private final long[] searchKey;
 
-    private final byte[] searchMask;
+    private final long[] searchMask;
 
-    private final byte[] minValue;
+    private final long[] minValue;
 
-    private final byte[] maxValue;
+    private final long[] maxValue;
 
-    public RangeDBRecordIterator(Comparator<byte[]> comparator, Iterator<byte[]> wrapped,
-        byte[] searchKey, byte[] searchMask, byte[] minValue, byte[] maxValue) {
+    public RangeDBRecordIterator(Comparator<long[]> comparator, Iterator<Entry<long[], Boolean>> wrapped,
+        long[] searchKey, long[] searchMask, long[] minValue, long[] maxValue) {
         this.comparator = comparator;
         this.wrapped = wrapped;
         this.searchKey = searchKey;
@@ -31,22 +32,33 @@ public class RangeDBRecordIterator implements RecordIterator {
     }
 
     @Override
-    public byte[] next() throws IOException {
+    public Record next() throws IOException {
         while (wrapped.hasNext()) {
-            byte[] value = wrapped.next();
-            if (maxValue != null && comparator.compare(maxValue, value) < 0) {
+            Entry<long[], Boolean> value = wrapped.next();
+            long[] key = value.getKey();
+            if (maxValue != null && comparator.compare(maxValue, key) < 0) {
                 // Reached maximum value, stop iterating
                 close();
                 return null;
-            } else if (searchKey != null && !ByteArrayUtil.matchesPattern(value, searchMask, searchKey)) {
+            } else if (searchKey != null && !matchesPattern(key, searchMask, searchKey)) {
                 // Value doesn't match search key/mask
                 continue;
             } else {
                 // Matching value found
-                return value;
+                return new Record(value.getKey(), value.getValue());
             }
         }
         return null;
+    }
+
+    static boolean matchesPattern(long[] value, long[] mask, long[] pattern) {
+        for (int i = 0; i < value.length; i++) {
+            if (((value[i] ^ pattern[i]) & mask[i]) != 0) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     @Override

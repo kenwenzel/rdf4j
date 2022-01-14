@@ -20,13 +20,13 @@ public class NativeIRI extends SimpleIRI implements NativeResource {
 
 	private volatile ValueStoreRevision revision;
 
-	private volatile int internalID;
+	private volatile long internalID;
 
 	/*--------------*
 	 * Constructors *
 	 *--------------*/
 
-	protected NativeIRI(ValueStoreRevision revision, int internalID) {
+	protected NativeIRI(ValueStoreRevision revision, long internalID) {
 		super();
 		setInternalID(internalID, revision);
 	}
@@ -35,7 +35,7 @@ public class NativeIRI extends SimpleIRI implements NativeResource {
 		this(revision, uri, UNKNOWN_ID);
 	}
 
-	public NativeIRI(ValueStoreRevision revision, String uri, int internalID) {
+	public NativeIRI(ValueStoreRevision revision, String uri, long internalID) {
 		super(uri);
 		setInternalID(internalID, revision);
 	}
@@ -53,7 +53,7 @@ public class NativeIRI extends SimpleIRI implements NativeResource {
 	 *---------*/
 
 	@Override
-	public void setInternalID(int internalID, ValueStoreRevision revision) {
+	public void setInternalID(long internalID, ValueStoreRevision revision) {
 		this.internalID = internalID;
 		this.revision = revision;
 	}
@@ -64,7 +64,7 @@ public class NativeIRI extends SimpleIRI implements NativeResource {
 	}
 
 	@Override
-	public int getInternalID() {
+	public long getInternalID() {
 		return internalID;
 	}
 

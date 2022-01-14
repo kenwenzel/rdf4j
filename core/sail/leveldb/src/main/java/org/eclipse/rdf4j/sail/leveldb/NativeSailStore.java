@@ -88,9 +88,8 @@ class NativeSailStore implements SailStore {
 		boolean initialized = false;
 		try {
 			namespaceStore = new NamespaceStore(dataDir);
-			valueStore = new ValueStore(dataDir, forceSync, valueCacheSize, valueIDCacheSize, namespaceCacheSize,
-					namespaceIDCacheSize);
-			tripleStore = new TripleStore(dataDir, tripleIndexes, forceSync);
+			valueStore = new ValueStore();
+			tripleStore = new TripleStore(tripleIndexes);
 			contextStore = new ContextStore(this, dataDir);
 			initialized = true;
 		} finally {
@@ -151,7 +150,7 @@ class NativeSailStore implements SailStore {
 		return new NativeSailSource(false);
 	}
 
-	List<Integer> getContextIDs(Resource... contexts) throws IOException {
+	List<Long> getContextIDs(Resource... contexts) throws IOException {
 		assert contexts.length > 0 : "contexts must not be empty";
 
 		// Filter duplicates
@@ -159,12 +158,12 @@ class NativeSailStore implements SailStore {
 		Collections.addAll(contextSet, contexts);
 
 		// Fetch IDs, filtering unknown resources from the result
-		List<Integer> contextIDs = new ArrayList<>(contextSet.size());
+		List<Long> contextIDs = new ArrayList<>(contextSet.size());
 		for (Resource context : contextSet) {
 			if (context == null) {
-				contextIDs.add(0);
+				contextIDs.add(0L);
 			} else {
-				int contextID = valueStore.getID(context);
+				long contextID = valueStore.getID(context);
 				if (contextID != NativeValue.UNKNOWN_ID) {
 					contextIDs.add(contextID);
 				}
@@ -175,7 +174,7 @@ class NativeSailStore implements SailStore {
 	}
 
 	CloseableIteration<Resource, SailException> getContexts() throws IOException {
-		RecordIterator btreeIter = tripleStore.getAllTriplesSortedByContext(false);
+		RecordIterator btreeIter = tripleStore.getAllTriplesSortedByContext();
 		CloseableIteration<? extends Statement, SailException> stIter1;
 		if (btreeIter == null) {
 			// Iterator over all statements
@@ -212,7 +211,7 @@ class NativeSailStore implements SailStore {
 	 */
 	CloseableIteration<? extends Statement, SailException> createStatementIterator(Resource subj, IRI pred, Value obj,
 			boolean explicit, Resource... contexts) throws IOException {
-		int subjID = NativeValue.UNKNOWN_ID;
+		long subjID = NativeValue.UNKNOWN_ID;
 		if (subj != null) {
 			subjID = valueStore.getID(subj);
 			if (subjID == NativeValue.UNKNOWN_ID) {
@@ -220,7 +219,7 @@ class NativeSailStore implements SailStore {
 			}
 		}
 
-		int predID = NativeValue.UNKNOWN_ID;
+		long predID = NativeValue.UNKNOWN_ID;
 		if (pred != null) {
 			predID = valueStore.getID(pred);
 			if (predID == NativeValue.UNKNOWN_ID) {
@@ -228,7 +227,7 @@ class NativeSailStore implements SailStore {
 			}
 		}
 
-		int objID = NativeValue.UNKNOWN_ID;
+		long objID = NativeValue.UNKNOWN_ID;
 		if (obj != null) {
 			objID = valueStore.getID(obj);
 
@@ -237,15 +236,15 @@ class NativeSailStore implements SailStore {
 			}
 		}
 
-		List<Integer> contextIDList = new ArrayList<>(contexts.length);
+		List<Long> contextIDList = new ArrayList<>(contexts.length);
 		if (contexts.length == 0) {
 			contextIDList.add(NativeValue.UNKNOWN_ID);
 		} else {
 			for (Resource context : contexts) {
 				if (context == null) {
-					contextIDList.add(0);
+					contextIDList.add(0L);
 				} else {
-					int contextID = valueStore.getID(context);
+					long contextID = valueStore.getID(context);
 
 					if (contextID != NativeValue.UNKNOWN_ID) {
 						contextIDList.add(contextID);
@@ -256,8 +255,8 @@ class NativeSailStore implements SailStore {
 
 		ArrayList<NativeStatementIterator> perContextIterList = new ArrayList<>(contextIDList.size());
 
-		for (int contextID : contextIDList) {
-			RecordIterator btreeIter = tripleStore.getTriples(subjID, predID, objID, contextID, explicit, false);
+		for (long contextID : contextIDList) {
+			RecordIterator btreeIter = tripleStore.getTriples(subjID, predID, objID, contextID, explicit);
 
 			perContextIterList.add(new NativeStatementIterator(btreeIter, valueStore));
 		}
@@ -270,7 +269,7 @@ class NativeSailStore implements SailStore {
 	}
 
 	double cardinality(Resource subj, IRI pred, Value obj, Resource context) throws IOException {
-		int subjID = NativeValue.UNKNOWN_ID;
+		long subjID = NativeValue.UNKNOWN_ID;
 		if (subj != null) {
 			subjID = valueStore.getID(subj);
 			if (subjID == NativeValue.UNKNOWN_ID) {
@@ -278,7 +277,7 @@ class NativeSailStore implements SailStore {
 			}
 		}
 
-		int predID = NativeValue.UNKNOWN_ID;
+		long predID = NativeValue.UNKNOWN_ID;
 		if (pred != null) {
 			predID = valueStore.getID(pred);
 			if (predID == NativeValue.UNKNOWN_ID) {
@@ -286,7 +285,7 @@ class NativeSailStore implements SailStore {
 			}
 		}
 
-		int objID = NativeValue.UNKNOWN_ID;
+		long objID = NativeValue.UNKNOWN_ID;
 		if (obj != null) {
 			objID = valueStore.getID(obj);
 			if (objID == NativeValue.UNKNOWN_ID) {
@@ -294,7 +293,7 @@ class NativeSailStore implements SailStore {
 			}
 		}
 
-		int contextID = NativeValue.UNKNOWN_ID;
+		long contextID = NativeValue.UNKNOWN_ID;
 		if (context != null) {
 			contextID = valueStore.getID(context);
 			if (contextID == NativeValue.UNKNOWN_ID) {
@@ -462,16 +461,16 @@ class NativeSailStore implements SailStore {
 			sinkStoreAccessLock.lock();
 			try {
 				startTriplestoreTransaction();
-				int subjID = valueStore.storeValue(subj);
-				int predID = valueStore.storeValue(pred);
-				int objID = valueStore.storeValue(obj);
+				long subjID = valueStore.storeValue(subj);
+				long predID = valueStore.storeValue(pred);
+				long objID = valueStore.storeValue(obj);
 
 				if (contexts.length == 0) {
 					contexts = new Resource[] { null };
 				}
 
 				for (Resource context : contexts) {
-					int contextID = 0;
+					long contextID = 0;
 					if (context != null) {
 						contextID = valueStore.storeValue(context);
 					}
@@ -502,21 +501,21 @@ class NativeSailStore implements SailStore {
 			sinkStoreAccessLock.lock();
 			try {
 				startTriplestoreTransaction();
-				int subjID = NativeValue.UNKNOWN_ID;
+				long subjID = NativeValue.UNKNOWN_ID;
 				if (subj != null) {
 					subjID = valueStore.getID(subj);
 					if (subjID == NativeValue.UNKNOWN_ID) {
 						return 0;
 					}
 				}
-				int predID = NativeValue.UNKNOWN_ID;
+				long predID = NativeValue.UNKNOWN_ID;
 				if (pred != null) {
 					predID = valueStore.getID(pred);
 					if (predID == NativeValue.UNKNOWN_ID) {
 						return 0;
 					}
 				}
-				int objID = NativeValue.UNKNOWN_ID;
+				long objID = NativeValue.UNKNOWN_ID;
 				if (obj != null) {
 					objID = valueStore.getID(obj);
 					if (objID == NativeValue.UNKNOWN_ID) {
@@ -524,7 +523,7 @@ class NativeSailStore implements SailStore {
 					}
 				}
 
-				final int[] contextIds = new int[contexts.length == 0 ? 1 : contexts.length];
+				final long[] contextIds = new long[contexts.length == 0 ? 1 : contexts.length];
 				if (contexts.length == 0) { // remove from all contexts
 					contextIds[0] = NativeValue.UNKNOWN_ID;
 				} else {
@@ -533,20 +532,20 @@ class NativeSailStore implements SailStore {
 						if (context == null) {
 							contextIds[i] = 0;
 						} else {
-							int id = valueStore.getID(context);
+							long id = valueStore.getID(context);
 							// unknown_id cannot be used (would result in removal from all contexts)
-							contextIds[i] = (id != NativeValue.UNKNOWN_ID) ? id : Integer.MIN_VALUE;
+							contextIds[i] = (id != NativeValue.UNKNOWN_ID) ? id : Long.MIN_VALUE;
 						}
 					}
 				}
 
 				long removeCount = 0;
-				for (int contextId : contextIds) {
-					Map<Integer, Long> result = tripleStore.removeTriplesByContext(subjID, predID, objID, contextId,
+				for (long contextId : contextIds) {
+					Map<Long, Long> result = tripleStore.removeTriplesByContext(subjID, predID, objID, contextId,
 							explicit);
 
-					for (Entry<Integer, Long> entry : result.entrySet()) {
-						Integer entryContextId = entry.getKey();
+					for (Entry<Long, Long> entry : result.entrySet()) {
+						Long entryContextId = entry.getKey();
 						if (entryContextId > 0) {
 							Resource modifiedContext = (Resource) valueStore.getValue(entryContextId);
 							contextStore.decrementBy(modifiedContext, entry.getValue());

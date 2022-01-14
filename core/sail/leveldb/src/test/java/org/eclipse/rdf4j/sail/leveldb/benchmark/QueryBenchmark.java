@@ -50,9 +50,9 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 @State(Scope.Benchmark)
 @Warmup(iterations = 2)
 @BenchmarkMode({ Mode.AverageTime })
-@Fork(value = 1, jvmArgs = { "-Xms1G", "-Xmx1G", "-Xmn512m", "-XX:+UseSerialGC" })
+@Fork(value = 0, jvmArgs = { "-Xms1G", "-Xmx1G", "-Xmn512m", "-XX:+UseSerialGC" })
 //@Fork(value = 1, jvmArgs = {"-Xms8G", "-Xmx8G", "-Xmn4G", "-XX:+UseSerialGC", "-XX:+UnlockCommercialFeatures", "-XX:StartFlightRecording=delay=60s,duration=120s,filename=recording.jfr,settings=profile", "-XX:FlightRecorderOptions=samplethreads=true,stackdepth=1024", "-XX:+UnlockDiagnosticVMOptions", "-XX:+DebugNonSafepoints"})
-@Measurement(iterations = 5)
+@Measurement(iterations = 2)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 public class QueryBenchmark {
 
@@ -85,7 +85,7 @@ public class QueryBenchmark {
 		Options opt = new OptionsBuilder()
 				.include("QueryBenchmark") // adapt to control which benchmark tests to run
 				// .addProfiler("stack", "lines=20;period=1;top=20")
-				.forks(1)
+				.forks(0)
 				.build();
 
 		new Runner(opt).run();

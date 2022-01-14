@@ -78,7 +78,7 @@ class NativeEvaluationStatistics extends EvaluationStatistics {
 	}
 
 	private double cardinality(Resource subj, IRI pred, Value obj, Resource context) throws IOException {
-		int subjID = NativeValue.UNKNOWN_ID;
+		long subjID = NativeValue.UNKNOWN_ID;
 		if (subj != null) {
 			subjID = valueStore.getID(subj);
 			if (subjID == NativeValue.UNKNOWN_ID) {
@@ -86,7 +86,7 @@ class NativeEvaluationStatistics extends EvaluationStatistics {
 			}
 		}
 
-		int predID = NativeValue.UNKNOWN_ID;
+		long predID = NativeValue.UNKNOWN_ID;
 		if (pred != null) {
 			predID = valueStore.getID(pred);
 			if (predID == NativeValue.UNKNOWN_ID) {
@@ -94,7 +94,7 @@ class NativeEvaluationStatistics extends EvaluationStatistics {
 			}
 		}
 
-		int objID = NativeValue.UNKNOWN_ID;
+		long objID = NativeValue.UNKNOWN_ID;
 		if (obj != null) {
 			objID = valueStore.getID(obj);
 			if (objID == NativeValue.UNKNOWN_ID) {
@@ -102,7 +102,7 @@ class NativeEvaluationStatistics extends EvaluationStatistics {
 			}
 		}
 
-		int contextID = NativeValue.UNKNOWN_ID;
+		long contextID = NativeValue.UNKNOWN_ID;
 		if (context != null) {
 			contextID = valueStore.getID(context);
 			if (contextID == NativeValue.UNKNOWN_ID) {

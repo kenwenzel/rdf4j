@@ -50,23 +50,24 @@ class NativeStatementIterator extends LookAheadIteration<Statement, SailExceptio
 	@Override
 	public Statement getNextElement() throws SailException {
 		try {
-			byte[] nextValue = btreeIter.next();
+			Record record = btreeIter.next();
 
-			if (nextValue == null) {
+			if (record == null) {
 				return null;
 			}
 
-			int subjID = ByteArrayUtil.getInt(nextValue, TripleStore.SUBJ_IDX);
+			long[] nextValue = record.key;
+			int subjID = (int)nextValue[TripleStore.SUBJ_IDX];
 			Resource subj = (Resource) valueStore.getValue(subjID);
 
-			int predID = ByteArrayUtil.getInt(nextValue, TripleStore.PRED_IDX);
+			int predID = (int)nextValue[TripleStore.PRED_IDX];
 			IRI pred = (IRI) valueStore.getValue(predID);
 
-			int objID = ByteArrayUtil.getInt(nextValue, TripleStore.OBJ_IDX);
+			int objID = (int)nextValue[TripleStore.OBJ_IDX];
 			Value obj = valueStore.getValue(objID);
 
 			Resource context = null;
-			int contextID = ByteArrayUtil.getInt(nextValue, TripleStore.CONTEXT_IDX);
+			int contextID = (int)nextValue[TripleStore.CONTEXT_IDX];
 			if (contextID != 0) {
 				context = (Resource) valueStore.getValue(contextID);
 			}
