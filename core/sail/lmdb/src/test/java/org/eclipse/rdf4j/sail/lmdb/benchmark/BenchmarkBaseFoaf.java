@@ -24,26 +24,34 @@ import org.eclipse.rdf4j.sail.lmdb.config.LmdbStoreConfig;
 
 public class BenchmarkBaseFoaf {
 
-	protected File file;
+	protected File dir;
+	protected boolean deleteDirOnTearDown;
 
 	protected SailRepository repository;
 	protected SailRepositoryConnection connection;
 
 	protected Random random = new Random(12345);
 
-	private int i = 1;
+	protected LmdbStoreConfig config = new LmdbStoreConfig("spoc,ospc,psoc").setForceSync(false);
+
+	protected long personNr = 1;
 	private final String[] countries = Locale.getISOCountries();
 	private final String[] languages = Locale.getISOLanguages();
+	private final int KNOWS_COUNT = 3;
 
 	public void setup() throws IOException {
-		i = 1;
+		personNr = 1;
 		if (connection != null) {
 			connection.close();
 			connection = null;
 		}
-		file = Files.newTemporaryFolder();
 
-		LmdbStore sail = new LmdbStore(file, new LmdbStoreConfig("spoc,ospc,psoc").setForceSync(false));
+		if (dir == null) {
+			dir = Files.newTemporaryFolder();
+			deleteDirOnTearDown = true;
+		}
+
+		LmdbStore sail = new LmdbStore(dir, config);
 		repository = new SailRepository(sail);
 		connection = repository.getConnection();
 
@@ -56,35 +64,37 @@ public class BenchmarkBaseFoaf {
 			connection = null;
 		}
 		repository.shutDown();
-		FileUtils.deleteDirectory(file);
+		if (deleteDirOnTearDown) {
+			FileUtils.deleteDirectory(dir);
+		}
 	}
 
 	void addPersonNameOnly() {
 		ValueFactory vf = connection.getValueFactory();
 
-		IRI person = vf.createIRI("http://www.example.org/persons/person_" + i);
+		IRI person = vf.createIRI("http://www.example.org/persons/person_" + personNr);
 		// English label
 		connection.add(person, vf.createIRI("http://www.w3.org/2000/01/rdf-schema#label"),
-				vf.createLiteral("Name @en" + i, "en"));
+				vf.createLiteral("Name @en" + personNr, "en"));
 
-		i++;
+		personNr++;
 	}
 
 	void addPerson() {
 		ValueFactory vf = connection.getValueFactory();
 
-		IRI person = vf.createIRI("http://www.example.org/persons/person_" + i);
+		IRI person = vf.createIRI("http://www.example.org/persons/person_" + personNr);
 		connection.add(person, vf.createIRI("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"),
 				vf.createIRI("http://xmlns.com/foaf/0.1/Person"));
 
 		// English label
 		connection.add(person, vf.createIRI("http://www.w3.org/2000/01/rdf-schema#label"),
-				vf.createLiteral("Name @en" + i, "en"));
+				vf.createLiteral("Name @en" + personNr, "en"));
 
 		// 3 other languages
 		random.ints(3, 0, languages.length).distinct().forEach(langIndex -> {
 			connection.add(person, vf.createIRI("http://www.w3.org/2000/01/rdf-schema#label"),
-					vf.createLiteral("Name " + i, languages[langIndex]));
+					vf.createLiteral("Name " + personNr, languages[langIndex]));
 		});
 
 		int countryIndex = random.nextInt(countries.length);
@@ -95,12 +105,14 @@ public class BenchmarkBaseFoaf {
 		connection.add(person, vf.createIRI("http://www.example.org/vocab/countryCode"),
 				vf.createLiteral(countries[countryIndex]));
 
-		int knowsMemberNr = random.nextInt(i) + 1;
-		for (int nr = 0; nr < 3; nr++) {
+		// the worst case here is to use a maximum distance of personNr because this possibly connects
+		// persons throughout the whole database
+		random.ints(KNOWS_COUNT, 1, 10000).distinct().forEach(distance -> {
+			long knowsMemberNr = personNr > distance ? personNr - distance : personNr + distance;
 			connection.add(person, vf.createIRI("http://xmlns.com/foaf/0.1/knows"),
-					vf.createIRI("http://www.example.org/persons/person_" + (knowsMemberNr + nr)));
-		}
+					vf.createIRI("http://www.example.org/persons/person_" + knowsMemberNr));
+		});
 
-		i++;
+		personNr++;
 	}
 }
