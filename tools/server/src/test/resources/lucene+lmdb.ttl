@@ -1,0 +1,18 @@
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#>.
+@prefix rep: <http://www.openrdf.org/config/repository#>.
+@prefix sr: <http://www.openrdf.org/config/repository/sail#>.
+@prefix sail: <http://www.openrdf.org/config/sail#>.
+@prefix sail-luc: <http://www.openrdf.org/config/sail/lucene#>.
+
+<https://example.com/repository> a rep:Repository ;
+  rdfs:label "Some label" ;
+  rep:repositoryImpl [
+      rep:repositoryType "openrdf:SailRepository" ;
+      sr:sailImpl [
+          sail:delegate [
+              sail:sailType "rdf4j:LmdbStore"
+          ];
+          sail:sailType "openrdf:LuceneSail" ;
+          sail-luc:indexDir "index/"
+      ]
+  ].
