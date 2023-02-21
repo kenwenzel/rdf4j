@@ -344,7 +344,7 @@ public final class Varint {
 	/**
 	 * A matcher for partial equality tests of varint lists.
 	 */
-	public static class GroupMatcher {
+	public static class GroupMatcher implements Matcher {
 
 		final ByteBuffer value;
 		final boolean[] shouldMatch;
@@ -360,10 +360,6 @@ public final class Varint {
 				lengths[i] = length;
 				pos += length;
 			}
-		}
-
-		public GroupMatcher(ByteBuffer value, boolean a, boolean b, boolean c, boolean d, boolean e) {
-			this(value, new boolean[] { a, b, c, d, e });
 		}
 
 		public boolean matches(ByteBuffer other) {

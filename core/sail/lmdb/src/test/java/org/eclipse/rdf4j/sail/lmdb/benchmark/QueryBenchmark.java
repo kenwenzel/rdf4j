@@ -30,6 +30,7 @@ import org.eclipse.rdf4j.repository.sail.SailRepository;
 import org.eclipse.rdf4j.repository.sail.SailRepositoryConnection;
 import org.eclipse.rdf4j.rio.RDFFormat;
 import org.eclipse.rdf4j.sail.lmdb.LmdbStore;
+import org.eclipse.rdf4j.sail.lmdb.config.LmdbStoreConfig;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -98,8 +99,10 @@ public class QueryBenchmark {
 	public void beforeClass() throws IOException {
 
 		file = Files.newTemporaryFolder();
-
-		repository = new SailRepository(new LmdbStore(file, ConfigUtil.createConfig()));
+		LmdbStoreConfig config = ConfigUtil.createConfig();
+		config.setTripleIndexes("z");
+		LmdbStore sail = new LmdbStore(file, config);
+		repository = new SailRepository(sail);
 
 		try (SailRepositoryConnection connection = repository.getConnection()) {
 			connection.begin(IsolationLevels.NONE);

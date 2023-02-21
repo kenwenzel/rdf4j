@@ -38,7 +38,7 @@ public class CardinalityTest {
 	public void before() throws Exception {
 		File dataDir = new File(tempFolder, "triplestore");
 		dataDir.mkdir();
-		tripleStore = new TripleStore(dataDir, new LmdbStoreConfig("spoc,posc"));
+		tripleStore = new TripleStore(dataDir, new LmdbStoreConfig("z"));
 	}
 
 	int count(RecordIterator it) {
@@ -51,7 +51,7 @@ public class CardinalityTest {
 
 	@Test
 	public void testCardinalities() throws Exception {
-		Random random = new Random();
+		Random random = new Random(1337);
 
 		int nrOfResources = 1000;
 

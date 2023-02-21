@@ -27,7 +27,6 @@ import java.util.concurrent.locks.StampedLock;
 
 import org.eclipse.rdf4j.sail.lmdb.TripleStore.TripleIndex;
 import org.eclipse.rdf4j.sail.lmdb.TxnManager.Txn;
-import org.eclipse.rdf4j.sail.lmdb.Varint.GroupMatcher;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.lmdb.MDBVal;
@@ -44,7 +43,7 @@ class LmdbRecordIterator implements RecordIterator {
 
 	private final MDBVal maxKey;
 
-	private final GroupMatcher groupMatcher;
+	private final Matcher matcher;
 
 	private final Txn txnRef;
 
@@ -95,9 +94,9 @@ class LmdbRecordIterator implements RecordIterator {
 
 		boolean matchValues = subj > 0 || pred > 0 || obj > 0 || context >= 0;
 		if (matchValues) {
-			this.groupMatcher = index.createMatcher(subj, pred, obj, context);
+			this.matcher = index.createMatcher(subj, pred, obj, context);
 		} else {
-			this.groupMatcher = null;
+			this.matcher = null;
 		}
 		this.dbi = index.getDB(explicit);
 		this.txnRef = txnRef;
@@ -166,7 +165,7 @@ class LmdbRecordIterator implements RecordIterator {
 				// if (maxKey != null && TripleStore.COMPARATOR.compare(keyData.mv_data(), maxKey.mv_data()) > 0) {
 				if (maxKey != null && mdb_cmp(txn, dbi, keyData, maxKey) > 0) {
 					lastResult = MDB_NOTFOUND;
-				} else if (groupMatcher != null && !groupMatcher.matches(keyData.mv_data())) {
+				} else if (matcher != null && !matcher.matches(keyData.mv_data())) {
 					// value doesn't match search key/mask, fetch next value
 					lastResult = mdb_cursor_get(cursor, keyData, valueData, MDB_NEXT);
 				} else {
