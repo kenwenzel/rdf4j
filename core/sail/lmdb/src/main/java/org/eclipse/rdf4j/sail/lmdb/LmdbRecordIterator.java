@@ -148,7 +148,11 @@ class LmdbRecordIterator implements RecordIterator {
 			}
 
 			if (fetchNext) {
-				lastResult = mdb_cursor_get(cursor, keyData, valueData, MDB_NEXT);
+				if (minKeyBuf != null) {
+					lastResult = index.nextElement(cursor, keyData, valueData, minKeyBuf, maxKeyBuf, minKeyBuf);
+				} else {
+					lastResult = mdb_cursor_get(cursor, keyData, valueData, MDB_NEXT);
+				}
 				fetchNext = false;
 			} else {
 				if (minKeyBuf != null) {

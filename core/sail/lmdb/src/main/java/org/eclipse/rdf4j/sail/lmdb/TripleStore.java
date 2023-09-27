@@ -833,20 +833,11 @@ class TripleStore implements Closeable {
 		@Override
 		void readElements(ByteBuffer bb, long[] values) {
 			keyToQuad(bb, values);
-			/*
-			bb.order(ByteOrder.BIG_ENDIAN);
-			for (int i = 0; i < values.length; i++) {
-				values[i] = bb.getLong();
-			}*/
 		}
 
 		@Override
 		void writeElements(ByteBuffer bb, long[] values) {
 			toKey(bb, values[0], values[1], values[2], values[3]);
-			/*bb.order(ByteOrder.BIG_ENDIAN);
-			for (int i = 0; i < values.length; i++) {
-				bb.putLong(values[i]);
-			}*/
 		}
 
 		@Override
@@ -868,6 +859,171 @@ class TripleStore implements Closeable {
 				}
 				return true;
 			};
+		}
+
+		void loadxxx10000(ByteBuffer bb, int byteIndex, int bit, int dimensions) {
+			int mask = 1 << bit;
+			bb.put(byteIndex, (byte)(bb.get(byteIndex) | mask));
+			do {
+				bit -= dimensions;
+				while (bit < 0) {
+					bit += 8;
+					byteIndex++;
+				}
+				if (byteIndex >= bb.limit()) {
+					break;
+				}
+				mask = ~(1 << bit);
+				bb.put(byteIndex, (byte)(bb.get(byteIndex) & mask));
+			} while (true);
+		}
+
+		void loadxxx01111(ByteBuffer bb, int byteIndex, int bit, int dimensions) {
+			int mask = ~(1 << bit);
+			bb.put(byteIndex, (byte)(bb.get(byteIndex) & mask));
+			do {
+				bit -= dimensions;
+				while (bit < 0) {
+					bit += 8;
+					byteIndex++;
+				}
+				if (byteIndex >= bb.limit()) {
+					break;
+				}
+				mask = 1 << bit;
+				bb.put(byteIndex, (byte)(bb.get(byteIndex) | mask));
+			} while (true);
+		}
+
+		public ByteBuffer clone(ByteBuffer original) {
+			ByteBuffer clone = ByteBuffer.allocate(original.limit());
+			original.rewind();
+			clone.put(original);
+			original.rewind();
+			clone.flip();
+			return clone;
+		}
+
+		// see also https://www.vision-tools.com/fileadmin/unternehmen/HTR/DBCode_mit_Erlaeuterung.txt
+		ByteBuffer computeBigMin(ByteBuffer keyBb, ByteBuffer minBb, ByteBuffer maxBb) {
+			ByteBuffer bigMin = clone(minBb);
+			ByteBuffer minBbLocal = minBb;
+			ByteBuffer maxBbLocal = maxBb;
+
+			boolean[] maxLoaded = new boolean[3];
+			boolean[] minLoaded = new boolean[3];
+			boolean[] bigMinLoaded = new boolean[3];
+
+			int bytes = keyBb.limit() - 8;
+			for (int byteIndex = 0; byteIndex < bytes; byteIndex++) {
+				byte key = keyBb.get(byteIndex);
+				byte min = minBbLocal.get(byteIndex);
+				byte max = maxBbLocal.get(byteIndex);
+				for (int bit = 7; bit >= 0; bit--) {
+					int bitmask = 1 << bit;
+					boolean keySet = (key & bitmask) != 0;
+					boolean minSet = (min & bitmask) != 0;
+					boolean maxSet = (max & bitmask) != 0;
+
+					if (!keySet && !minSet && !maxSet) {
+						// 0 0 0 -> no action, continue
+						continue;
+					} else if (!keySet && !minSet && maxSet) {
+						if (minBb == minBbLocal) {
+							minBbLocal = clone(minBb);
+						}
+						if (maxBb == maxBbLocal) {
+							maxBbLocal = clone(maxBb);
+						}
+						// 0 0 1 -> BIGMIN:=LOAD xxx10000 into MIN
+						bigMin.clear();
+						bigMin.put(minBbLocal);
+						bigMin.flip();
+						minBbLocal.rewind();
+
+						if (! bigMinLoaded[bit % 3]) {
+							loadxxx10000(bigMin, byteIndex, bit, 3);
+							bigMinLoaded[bit % 3] = true;
+						} else {
+							int mask = 1 << bit;
+							bigMin.put(byteIndex, (byte)(maxBbLocal.get(byteIndex) | mask));
+						}
+
+						// System.out.println("before: " + Arrays.toString(bigMin.array()));
+
+						// System.out.println("after : " + Arrays.toString(bigMin.array()));
+
+						//          MAX   :=LOAD xxx01111 into MAX
+						if (! maxLoaded[bit % 3]) {
+							loadxxx01111(maxBbLocal, byteIndex, bit, 3);
+							maxLoaded[bit % 3] = true;
+						} else {
+							int mask = ~(1 << bit);
+							maxBbLocal.put(byteIndex, (byte)(maxBbLocal.get(byteIndex) & mask));
+						}
+						max = maxBbLocal.get(byteIndex);
+					} else if (!keySet && minSet && !maxSet) {
+						// 0 1 0  not possible
+						throw new IllegalArgumentException("Invalid min and max values");
+					} else if (!keySet && minSet && maxSet) {
+						// 0 1 1  bigmin:=min, finish
+						minBbLocal.rewind();
+						bigMin.clear();
+						bigMin.put(minBbLocal);
+						bigMin.flip();
+
+						return bigMin;
+					} else if (keySet && !minSet && !maxSet) {
+						// 1 0 0  finish
+						return bigMin;
+					} else if (keySet && !minSet && maxSet) {
+						if (minBb == minBbLocal) {
+							minBbLocal = clone(minBb);
+						}
+						// 1 0 1  load xxx10000 into MIN
+						if (! minLoaded[bit % 3]) {
+							loadxxx10000(minBbLocal, byteIndex, bit, 3);
+							minLoaded[bit % 3] = true;
+						} else {
+							int mask = 1 << bit;
+							minBbLocal.put(byteIndex, (byte)(maxBbLocal.get(byteIndex) | mask));
+						}
+						min = minBbLocal.get(byteIndex);
+					} else if (keySet && minSet && !maxSet) {
+						// 1 1 0  not possible
+						throw new IllegalArgumentException("Invalid min and max values");
+					} else {
+						// 1 1 1 no action, continue
+						continue;
+					}
+				}
+			}
+			return bigMin;
+		}
+
+		protected int nextElement(long cursor, MDBVal keyData, MDBVal valueData, ByteBuffer minKey, ByteBuffer maxKey,
+			ByteBuffer newKeyBuffer) {
+			ByteBuffer bigMin = computeBigMin(keyData.mv_data(), minKey, maxKey);
+			/*byte[] data = new byte[minKey.limit()];
+
+			ByteBuffer keyBuf = keyData.mv_data();
+			keyBuf.get(data);
+			System.out.println("key: " + Arrays.toString(data));
+
+			minKey.get(data);
+			System.out.println("min: " + Arrays.toString(data));*/
+
+			newKeyBuffer.clear();
+			newKeyBuffer.put(bigMin);
+			newKeyBuffer.flip();
+			keyData.mv_data(newKeyBuffer);
+
+			/*minKey.rewind();
+			System.out.println("big: " + Arrays.toString(bigMin.array()));
+			maxKey.rewind();
+			maxKey.get(data);
+			System.out.println("max: " + Arrays.toString(data));*/
+			return mdb_cursor_get(cursor, keyData, valueData, MDB_SET_RANGE);
 		}
 	}
 
@@ -1063,6 +1219,11 @@ class TripleStore implements Closeable {
 			Varint.writeListUnsigned(bb, values);
 		}
 
+		protected int nextElement(long cursor, MDBVal keyData, MDBVal valueData, ByteBuffer minKey, ByteBuffer maxKey,
+			ByteBuffer newKeyBuffer) {
+			return mdb_cursor_get(cursor, keyData, valueData, MDB_NEXT);
+		}
+
 		protected double cardinality(long subj, long pred, long obj, long context) throws IOException {
 			int relevantParts = getPatternScore(subj, pred, obj, context);
 			if (relevantParts == 0) {
@@ -1160,7 +1321,7 @@ class TripleStore implements Closeable {
 										endOfRange = true;
 										break;
 									} else if (! matcher.matches(keyData.mv_data())) {
-										rc = mdb_cursor_get(cursor, keyData, valueData, MDB_NEXT);
+										rc = nextElement(cursor, keyData, valueData, keyBuf, maxKeyBuf, keyBuf);
 										if (rc != 0) {
 											// no more elements are available
 											endOfRange = true;
