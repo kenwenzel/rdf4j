@@ -812,10 +812,10 @@ class TripleStore implements Closeable {
 			long part2 = morton3D.encode((int) ((subj >> 21) & 0x1fffff), (int) ((pred >> 21) & 0x1fffff), (int) ((obj >> 21) & 0x1fffff));
 			long part3 = morton3D.encode((int) ((subj >> 42) & 0x1fffff), (int) ((pred >> 42) & 0x1fffff), (int) ((obj >> 42) & 0x1fffff));
 			bb.order(ByteOrder.BIG_ENDIAN);
+			bb.putLong(context);
 			bb.putLong(part3);
 			bb.putLong(part2);
 			bb.putLong(part1);
-			bb.putLong(context);
 		}
 
 		@Override
@@ -824,10 +824,10 @@ class TripleStore implements Closeable {
 			int[] part3 = morton3D.decode(key.getLong());
 			int[] part2 = morton3D.decode(key.getLong());
 			int[] part1 = morton3D.decode(key.getLong());
-			quad[0] = part3[0] << 42 | part2[0] << 21 | part1[0];
-			quad[1] = part3[1] << 42 | part2[1] << 21 | part1[1];
-			quad[2] = part3[2] << 42 | part2[2] << 21 | part1[2];
-			quad[3] = key.getLong();
+			quad[0] = key.getLong();
+			quad[1] = part3[0] << 42 | part2[0] << 21 | part1[0];
+			quad[2] = part3[1] << 42 | part2[1] << 21 | part1[1];
+			quad[3] = part3[2] << 42 | part2[2] << 21 | part1[2];
 		}
 
 		@Override
@@ -837,7 +837,7 @@ class TripleStore implements Closeable {
 
 		@Override
 		void writeElements(ByteBuffer bb, long[] values) {
-			toKey(bb, values[0], values[1], values[2], values[3]);
+			toKey(bb, values[1], values[2], values[3], values[0]);
 		}
 
 		@Override
@@ -914,8 +914,8 @@ class TripleStore implements Closeable {
 			boolean[] minLoaded = new boolean[3];
 			boolean[] bigMinLoaded = new boolean[3];
 
-			int bytes = keyBb.limit() - 8;
-			for (int byteIndex = 0; byteIndex < bytes; byteIndex++) {
+			int bytes = keyBb.limit();
+			for (int byteIndex = 8; byteIndex < bytes; byteIndex++) {
 				byte key = keyBb.get(byteIndex);
 				byte min = minBbLocal.get(byteIndex);
 				byte max = maxBbLocal.get(byteIndex);

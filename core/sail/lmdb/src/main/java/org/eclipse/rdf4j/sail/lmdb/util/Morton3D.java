@@ -186,11 +186,9 @@ public class Morton3D {
      */
     public void decode(long c, int[] result) {
         // Morton codes up to 64 bits
-        if (c < Math.pow(2, 48)) {
-            result[0] = decodeHelper(c, MortonTable512DecodeX);
-            result[1] = decodeHelper(c, MortonTable512DecodeY);
-            result[2] = decodeHelper(c, MortonTable512DecodeZ);
-        }
+        result[0] = decodeHelper(c, MortonTable512DecodeX);
+        result[1] = decodeHelper(c, MortonTable512DecodeY);
+        result[2] = decodeHelper(c, MortonTable512DecodeZ);
     }
 
     /**
