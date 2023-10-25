@@ -1,0 +1,30 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix fmi: <http://iwu.fraunhofer.de/h2link/fmi/> .
+@prefix ssp: <http://iwu.fraunhofer.de/h2link/ssp/> .
+@prefix h2link: <http://iwu.fraunhofer.de/h2link/db/> .
+@prefix port: <http://iwu.fraunhofer.de/h2link/port/> .
+@prefix dfe: <http://example.org/models/h2link/dfe/> .
+
+dfe:exp a fmi:DefaultExperiment;
+  ssp:hasParent dfe:SSPModel1 ;
+  fmi:startTime 0 ;
+  fmi:stopTime 1 ;
+  fmi:stepSize "0.1"^^xsd:double.
+
+dfe:SSPModel1 a ssp:SystemStructureDescription;
+  rdfs:label "sim " ;
+  ssp:hasChild dfe:exp ,
+    dfe:sys .
+
+dfe:WmWindportWkaWindportConnection a ssp:Connection;
+  rdfs:label "WmWindportWkaWindportConnection" ;
+  ssp:connectsFrom <http://iwu.fraunhofer.de/h2link/db/windmodel/windmodel_windport> ;
+  ssp:connectsTo <http://iwu.fraunhofer.de/h2link/db/h2digital_wka/wka_windport> ;
+  ssp:hasParent dfe:sys .
+
+dfe:sys a ssp:System;
+  rdfs:label "sys";
+  ssp:hasParent dfe:SSPModel1;
+  ssp:hasChild dfe:WmWindportWkaWindportConnection.

@@ -12,10 +12,13 @@ package org.eclipse.rdf4j.federated.evaluation.union;
 
 import java.util.concurrent.Phaser;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.eclipse.rdf4j.federated.evaluation.concurrent.ControlledWorkerScheduler;
+import org.eclipse.rdf4j.federated.evaluation.concurrent.ParallelTaskBase;
 import org.eclipse.rdf4j.federated.structures.QueryInfo;
 import org.eclipse.rdf4j.query.QueryEvaluationException;
+import org.eclipse.rdf4j.query.QueryInterruptedException;
 
 /**
  * Execution of union tasks with {@link ControlledWorkerScheduler}. Tasks can be added using the provided functions.
@@ -47,7 +50,20 @@ public class ControlledWorkerUnion<T> extends WorkerUnionBase<T> {
 		scheduler.scheduleAll(tasks, this);
 
 		// wait until all tasks are executed
-		phaser.awaitAdvanceInterruptibly(phaser.arrive(), queryInfo.getMaxRemainingTimeMS(), TimeUnit.MILLISECONDS);
+		try {
+			phaser.awaitAdvanceInterruptibly(phaser.arrive(), queryInfo.getMaxRemainingTimeMS(), TimeUnit.MILLISECONDS);
+		} catch (TimeoutException e) {
+			tasks.forEach(pt -> {
+				if (((ParallelTaskBase)pt).scheduledFuture != null && ! ((ParallelTaskBase)pt).scheduledFuture.isDone()) {
+					if (pt instanceof ParallelUnionOperatorTask) {
+						System.out.println("waiting for:\n" + pt);
+					} else if (pt instanceof ParallelPreparedUnionTask) {
+						System.out.println("waiting for:\n" + ((ParallelPreparedUnionTask) pt).preparedQuery);
+					}
+				}
+			});
+			throw new QueryInterruptedException(e);
+		}
 	}
 
 	@Override

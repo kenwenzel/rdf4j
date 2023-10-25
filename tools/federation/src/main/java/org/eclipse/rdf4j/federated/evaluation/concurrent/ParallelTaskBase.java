@@ -22,7 +22,7 @@ public abstract class ParallelTaskBase<T> implements ParallelTask<T> {
 
 	private static final Logger logger = LoggerFactory.getLogger(ParallelExecutorBase.class);
 
-	protected Future<?> scheduledFuture;
+	public Future<?> scheduledFuture;
 	private CloseableIteration<T> closableIter;
 	private volatile boolean cancelled = false;
 	private volatile boolean closed = false;
