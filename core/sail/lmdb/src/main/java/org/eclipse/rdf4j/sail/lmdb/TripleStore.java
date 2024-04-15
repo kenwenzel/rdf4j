@@ -20,14 +20,17 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.util.lmdb.LMDB.MDB_CREATE;
 import static org.lwjgl.util.lmdb.LMDB.MDB_FIRST;
+import static org.lwjgl.util.lmdb.LMDB.MDB_KEYEXIST;
 import static org.lwjgl.util.lmdb.LMDB.MDB_LAST;
 import static org.lwjgl.util.lmdb.LMDB.MDB_NEXT;
 import static org.lwjgl.util.lmdb.LMDB.MDB_NOMETASYNC;
+import static org.lwjgl.util.lmdb.LMDB.MDB_NOOVERWRITE;
 import static org.lwjgl.util.lmdb.LMDB.MDB_NOSYNC;
 import static org.lwjgl.util.lmdb.LMDB.MDB_NOTFOUND;
 import static org.lwjgl.util.lmdb.LMDB.MDB_NOTLS;
 import static org.lwjgl.util.lmdb.LMDB.MDB_PREV;
 import static org.lwjgl.util.lmdb.LMDB.MDB_SET_RANGE;
+import static org.lwjgl.util.lmdb.LMDB.MDB_SUCCESS;
 import static org.lwjgl.util.lmdb.LMDB.mdb_cmp;
 import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_close;
 import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_get;
@@ -47,6 +50,7 @@ import static org.lwjgl.util.lmdb.LMDB.mdb_get;
 import static org.lwjgl.util.lmdb.LMDB.mdb_put;
 import static org.lwjgl.util.lmdb.LMDB.mdb_set_compare;
 import static org.lwjgl.util.lmdb.LMDB.mdb_stat;
+import static org.lwjgl.util.lmdb.LMDB.mdb_strerror;
 import static org.lwjgl.util.lmdb.LMDB.mdb_txn_abort;
 import static org.lwjgl.util.lmdb.LMDB.mdb_txn_begin;
 import static org.lwjgl.util.lmdb.LMDB.mdb_txn_commit;
@@ -851,6 +855,7 @@ class TripleStore implements Closeable {
 
 	public boolean storeTriple(long subj, long pred, long obj, long context, boolean explicit) throws IOException {
 		TripleIndex mainIndex = indexes.get(0);
+		boolean stAdded;
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			MDBVal keyVal = MDBVal.malloc(stack);
 			// use calloc to get an empty data value
@@ -860,11 +865,11 @@ class TripleStore implements Closeable {
 			keyBuf.flip();
 			keyVal.mv_data(keyBuf);
 
-			boolean foundExplicit = mdb_get(writeTxn, mainIndex.getDB(true), keyVal, dataVal) == 0;
-			boolean foundImplicit = !foundExplicit && mdb_get(writeTxn, mainIndex.getDB(false), keyVal, dataVal) == 0;
+			// boolean foundExplicit = mdb_get(writeTxn, mainIndex.getDB(true), keyVal, dataVal) == 0;
+			// boolean foundImplicit = !foundExplicit && mdb_get(writeTxn, mainIndex.getDB(false), keyVal, dataVal) == 0;
 
-			boolean stAdded = !(foundExplicit || foundImplicit);
-			if (stAdded || explicit && foundImplicit) {
+			// boolean stAdded = !(foundExplicit || foundImplicit);
+			//if (stAdded || explicit && foundImplicit) {
 				if (recordCache == null) {
 					if (requiresResize()) {
 						// map is full, resize required
@@ -874,7 +879,7 @@ class TripleStore implements Closeable {
 				}
 				if (recordCache != null) {
 					long quad[] = new long[] { subj, pred, obj, context };
-					if (explicit && foundImplicit) {
+					if (explicit) { // && foundImplicit) {
 						// remove implicit statement
 						recordCache.removeRecord(quad, false);
 					}
@@ -882,33 +887,40 @@ class TripleStore implements Closeable {
 					return recordCache.storeRecord(quad, explicit);
 				}
 
-				if (explicit && foundImplicit) {
-					E(mdb_del(writeTxn, mainIndex.getDB(false), keyVal, dataVal));
+				int rc = mdb_put(writeTxn, mainIndex.getDB(explicit), keyVal, dataVal, MDB_NOOVERWRITE);
+				if (rc != MDB_SUCCESS && rc != MDB_KEYEXIST) {
+					throw new IOException(mdb_strerror(rc));
 				}
-				E(mdb_put(writeTxn, mainIndex.getDB(explicit), keyVal, dataVal, 0));
-
-				for (int i = 1; i < indexes.size(); i++) {
-					TripleIndex index = indexes.get(i);
-					keyBuf.clear();
-					index.toKey(keyBuf, subj, pred, obj, context);
-					keyBuf.flip();
-
-					// update buffer positions in MDBVal
-					keyVal.mv_data(keyBuf);
-
-					if (explicit && foundImplicit) {
-						E(mdb_del(writeTxn, mainIndex.getDB(false), keyVal, dataVal));
-					}
-					E(mdb_put(writeTxn, index.getDB(explicit), keyVal, dataVal, 0));
-				}
+				stAdded = rc == MDB_SUCCESS;
+			if (explicit && stAdded) { // && foundImplicit) {
+				E(mdb_del(writeTxn, mainIndex.getDB(false), keyVal, dataVal));
+			}
+				//E(mdb_put(writeTxn, mainIndex.getDB(explicit), keyVal, dataVal, 0));
 
 				if (stAdded) {
-					incrementContext(stack, context);
+					for (int i = 1; i < indexes.size(); i++) {
+						TripleIndex index = indexes.get(i);
+						keyBuf.clear();
+						index.toKey(keyBuf, subj, pred, obj, context);
+						keyBuf.flip();
+
+						// update buffer positions in MDBVal
+						keyVal.mv_data(keyBuf);
+
+						if (explicit) { // && foundImplicit) {
+							E(mdb_del(writeTxn, mainIndex.getDB(false), keyVal, dataVal));
+						}
+						E(mdb_put(writeTxn, index.getDB(explicit), keyVal, dataVal, 0));
+					}
+
+					if (stAdded) {
+						incrementContext(stack, context);
+					}
 				}
 			}
 
 			return stAdded;
-		}
+		// }
 	}
 
 	private void incrementContext(MemoryStack stack, long context) throws IOException {
