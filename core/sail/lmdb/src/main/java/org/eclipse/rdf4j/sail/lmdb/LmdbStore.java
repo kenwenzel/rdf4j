@@ -257,6 +257,10 @@ public class LmdbStore extends AbstractNotifyingSail implements FederatedService
 					// Model can't fit into memory, use another LmdbSailStore to store delta
 					LmdbSailStore lmdbSailStore = new LmdbSailStore(dataDir, config);
 					lmdbSailStore.enableMultiThreading = false;
+					// do not gc values in temporary store
+					lmdbSailStore.enableGc = false;
+					// does not need to isolate transactions and therefore can optimize autogrow and others
+					lmdbSailStore.setTransactionIsolation(false);
 					return lmdbSailStore;
 				}
 			}) {

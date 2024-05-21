@@ -73,6 +73,7 @@ class LmdbSailStore implements SailStore {
 	private volatile boolean nextTransactionAsync;
 
 	boolean enableMultiThreading = true;
+	boolean enableGc = true;
 
 	private PersistentSetFactory<Long> setFactory;
 	private PersistentSet<Long> unusedIds, nextUnusedIds;
@@ -403,6 +404,10 @@ class LmdbSailStore implements SailStore {
 		}
 	}
 
+	public void setTransactionIsolation(boolean transactionIsolation) {
+		this.tripleStore.setTransactionIsolation(transactionIsolation);
+	}
+
 	private final class LmdbSailSource extends BackingSailSource {
 
 		private final boolean explicit;
@@ -572,44 +577,11 @@ class LmdbSailStore implements SailStore {
 
 		@Override
 		public void approveAll(Set<Statement> approved, Set<Resource> approvedContexts) {
-
 			sinkStoreAccessLock.lock();
 			try {
-				startTransaction(true);
-
-				for (Statement statement : approved) {
-					Resource subj = statement.getSubject();
-					IRI pred = statement.getPredicate();
-					Value obj = statement.getObject();
-					Resource context = statement.getContext();
-
-					AddQuadOperation q = new AddQuadOperation();
-					q.s = valueStore.storeValue(subj);
-					q.p = valueStore.storeValue(pred);
-					q.o = valueStore.storeValue(obj);
-					q.c = context == null ? 0 : valueStore.storeValue(context);
-					q.context = context;
-					q.explicit = explicit;
-
-					if (multiThreadingActive) {
-						while (!opQueue.add(q)) {
-							if (tripleStoreException != null) {
-								throw wrapTripleStoreException();
-							}
-						}
-
-					} else {
-						q.execute();
-					}
-
+				for (Statement stmt : approved) {
+					addStatement(stmt.getSubject(), stmt.getPredicate(), stmt.getObject(), explicit, stmt.getContext());
 				}
-			} catch (IOException e) {
-				rollback();
-				throw new SailException(e);
-			} catch (RuntimeException e) {
-				rollback();
-				logger.error("Encountered an unexpected problem while trying to add a statement", e);
-				throw e;
 			} finally {
 				sinkStoreAccessLock.unlock();
 			}
@@ -715,7 +687,10 @@ class LmdbSailStore implements SailStore {
 
 		private void addStatement(Resource subj, IRI pred, Value obj, boolean explicit, Resource context)
 				throws SailException {
-			sinkStoreAccessLock.lock();
+			boolean hasLock = sinkStoreAccessLock.isHeldByCurrentThread();
+			if (! hasLock) {
+				sinkStoreAccessLock.lock();
+			}
 			try {
 				startTransaction(true);
 
@@ -746,7 +721,9 @@ class LmdbSailStore implements SailStore {
 				logger.error("Encountered an unexpected problem while trying to add a statement", e);
 				throw e;
 			} finally {
-				sinkStoreAccessLock.unlock();
+				if (! hasLock) {
+					sinkStoreAccessLock.unlock();
+				}
 			}
 		}
 
@@ -756,9 +733,11 @@ class LmdbSailStore implements SailStore {
 			for (long contextId : contexts) {
 				tripleStore.removeTriplesByContext(subj, pred, obj, contextId, explicit, quad -> {
 					removeCount[0]++;
-					for (long id : quad) {
-						if (id != 0L) {
-							unusedIds.add(id);
+					if (enableGc) {
+						for (long id : quad) {
+							if (id != 0L) {
+								unusedIds.add(id);
+							}
 						}
 					}
 				});

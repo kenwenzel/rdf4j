@@ -15,12 +15,17 @@ import java.io.File;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.eclipse.rdf4j.common.io.FileUtil;
 import org.eclipse.rdf4j.model.IRI;
@@ -272,66 +277,104 @@ abstract class MemoryOverflowModel extends AbstractModel {
 		}
 	}
 
+	static class GcInfo {
+		long count;
+		long time;
+	}
+
+	private final Map<String, GcInfo> prevGcInfo = new ConcurrentHashMap<>();
+
+	private synchronized boolean highGcLoad() {
+		boolean highLoad = false;
+
+		// get all garbage collector MXBeans.
+		List<GarbageCollectorMXBean> gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
+		for (GarbageCollectorMXBean gcBean : gcBeans) {
+			long count = gcBean.getCollectionCount();
+			long time = gcBean.getCollectionTime();
+
+			GcInfo prevInfo = prevGcInfo.get(gcBean.getName());
+			if (prevInfo != null) {
+				long countDiff = count - prevInfo.count;
+				long timeDiff = time - prevInfo.time;
+				if (countDiff != 0) {
+					double gcLoad = (double) timeDiff / countDiff;
+					// TODO find good threshold
+					if (gcLoad > 100) {
+						highLoad = true;
+					}
+				}
+			} else {
+				prevInfo = new GcInfo();
+				prevGcInfo.put(gcBean.getName(), prevInfo);
+			}
+			prevInfo.count = count;
+			prevInfo.time = time;
+		}
+		return highLoad;
+	}
+
 	private void checkMemoryOverflow() {
 		if (disk == getDelegate()) {
 			return;
 		}
 
-		if (overflow) {
-			innerCheckMemoryOverflow();
-		}
 		int size = size() + 1;
 		if (size >= LARGE_BLOCK && size % LARGE_BLOCK == 0) {
 			innerCheckMemoryOverflow();
 		}
-
 	}
 
-	private void innerCheckMemoryOverflow() {
-		if (disk == getDelegate()) {
-			return;
-		}
-
-		// maximum heap size the JVM can allocate
-		long maxMemory = RUNTIME.maxMemory();
-
-		// total currently allocated JVM memory
-		long totalMemory = RUNTIME.totalMemory();
-
-		// amount of memory free in the currently allocated JVM memory
-		long freeMemory = RUNTIME.freeMemory();
-
-		// estimated memory used
-		long used = totalMemory - freeMemory;
-
-		// amount of memory the JVM can still allocate from the OS (upper boundary is the max heap)
-		long freeToAllocateMemory = maxMemory - used;
-
-		if (baseline > 0) {
-			long blockSize = used - baseline;
-			if (blockSize > maxBlockSize) {
-				maxBlockSize = blockSize;
+	private synchronized void innerCheckMemoryOverflow() {
+		if (disk == null) {
+			if (highGcLoad()) {
+				logger.debug("syncing at {} triples due to gc load.", size());
+				overflowToDisk();
+				System.gc();
+				return;
 			}
-			if (overflow && freeToAllocateMemory < MIN_AVAILABLE_MEM_BEFORE_OVERFLOWING * 2) {
-				// stricter memory requirements to not overflow if other models are overflowing
-				logger.debug("syncing at {} triples. max block size: {}", size(), maxBlockSize);
-				overflowToDisk();
-				System.gc();
-			} else if (freeToAllocateMemory < MIN_AVAILABLE_MEM_BEFORE_OVERFLOWING ||
-					freeToAllocateMemory < Math.min(0.15 * maxMemory, maxBlockSize)) {
-				// Sync if either the estimated size of the next block is larger than remaining memory, or
-				// if less than 15% of the heap is still free (this last condition to avoid GC overhead limit)
 
-				logger.debug("syncing at {} triples. max block size: {}", size(), maxBlockSize);
-				overflowToDisk();
-				System.gc();
-			} else {
-				if (overflow) {
-					overflow = false;
+			// maximum heap size the JVM can allocate
+			long maxMemory = RUNTIME.maxMemory();
+
+			// total currently allocated JVM memory
+			long totalMemory = RUNTIME.totalMemory();
+
+			// amount of memory free in the currently allocated JVM memory
+			long freeMemory = RUNTIME.freeMemory();
+
+			// estimated memory used
+			long used = totalMemory - freeMemory;
+
+			// amount of memory the JVM can still allocate from the OS (upper boundary is the max heap)
+			long freeToAllocateMemory = maxMemory - used;
+
+			if (baseline > 0) {
+				long blockSize = used - baseline;
+				if (blockSize > maxBlockSize) {
+					maxBlockSize = blockSize;
+				}
+				if (overflow && freeToAllocateMemory < MIN_AVAILABLE_MEM_BEFORE_OVERFLOWING * 2) {
+					// stricter memory requirements to not overflow if other models are overflowing
+					logger.debug("syncing at {} triples. max block size: {}", size(), maxBlockSize);
+					overflowToDisk();
+					System.gc();
+				} else if (freeToAllocateMemory < MIN_AVAILABLE_MEM_BEFORE_OVERFLOWING ||
+					freeToAllocateMemory < Math.min(0.15 * maxMemory, maxBlockSize)) {
+					// Sync if either the estimated size of the next block is larger than remaining memory, or
+					// if less than 15% of the heap is still free (this last condition to avoid GC overhead limit)
+
+					logger.debug("syncing at {} triples. max block size: {}", size(), maxBlockSize);
+					overflowToDisk();
+					System.gc();
+				} else {
+					if (overflow) {
+						overflow = false;
+					}
 				}
 			}
+			baseline = used;
 		}
-		baseline = used;
 	}
 
 	private synchronized void overflowToDisk() {
