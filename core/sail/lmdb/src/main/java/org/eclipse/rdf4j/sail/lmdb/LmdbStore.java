@@ -255,7 +255,7 @@ public class LmdbStore extends AbstractNotifyingSail implements FederatedService
 				@Override
 				protected LmdbSailStore createSailStore(File dataDir) throws IOException, SailException {
 					// Model can't fit into memory, use another LmdbSailStore to store delta
-					LmdbSailStore lmdbSailStore = new LmdbSailStore(dataDir, config);
+					LmdbSailStore lmdbSailStore = new LmdbSailStore(dataDir, new LmdbStoreConfig());
 					lmdbSailStore.enableMultiThreading = false;
 					// do not gc values in temporary store
 					lmdbSailStore.enableGc = false;

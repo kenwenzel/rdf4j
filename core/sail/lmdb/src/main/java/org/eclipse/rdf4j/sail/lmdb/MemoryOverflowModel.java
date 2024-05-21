@@ -17,15 +17,18 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
+import java.lang.management.RuntimeMXBean;
 import java.nio.file.Files;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+
+import javax.management.NotificationEmitter;
+import javax.management.openmbean.CompositeData;
 
 import org.eclipse.rdf4j.common.io.FileUtil;
 import org.eclipse.rdf4j.model.IRI;
@@ -42,6 +45,9 @@ import org.eclipse.rdf4j.sail.SailException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.sun.management.GarbageCollectionNotificationInfo;
+import com.sun.management.GcInfo;
+
 /**
  * Model implementation that stores in a {@link LinkedHashModel} until more than 10KB statements are added and the
  * estimated memory usage is more than the amount of free memory available. Once the threshold is cross this
@@ -55,12 +61,9 @@ abstract class MemoryOverflowModel extends AbstractModel {
 
 	private static final int LARGE_BLOCK = 5 * 1024;
 
-	private static volatile boolean overflow;
-
 	// To reduce the chance of OOM we will always overflow once we get close to running out of memory even if we think
 	// we have space for one more block. The limit is currently set at 32 MB for small heaps and 128 MB for large heaps.
-	private static final int MIN_AVAILABLE_MEM_BEFORE_OVERFLOWING = RUNTIME.maxMemory() >= 1024 ? 128 * 1024 * 1024
-			: 32 * 1024 * 1024;
+	private static final int MIN_AVAILABLE_MEM_BEFORE_OVERFLOWING = Math.max((int) (RUNTIME.maxMemory() * 0.15), 32 * 1024 * 1024);
 
 	final Logger logger = LoggerFactory.getLogger(MemoryOverflowModel.class);
 
@@ -72,11 +75,61 @@ abstract class MemoryOverflowModel extends AbstractModel {
 
 	private transient volatile SailSourceModel disk;
 
-	private long baseline = 0;
-
-	private long maxBlockSize = 0;
-
 	SimpleValueFactory vf = SimpleValueFactory.getInstance();
+
+	private static volatile boolean overflow = false;
+	private static volatile long lastGcUpdate;
+	private static volatile long gcSum;
+	private static volatile ConcurrentLinkedQueue<GcInfo> gcInfos = new ConcurrentLinkedQueue<>();
+	static {
+		List<GarbageCollectorMXBean> gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
+		RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
+		for (GarbageCollectorMXBean gcBean : gcBeans) {
+			NotificationEmitter emitter = (NotificationEmitter) gcBean;
+			emitter.addNotificationListener((notification, o) -> {
+				long uptimeInMillis = runtimeMXBean.getUptime();
+				while (! gcInfos.isEmpty()) {
+					if (uptimeInMillis - gcInfos.peek().getEndTime() > 5000) {
+						gcSum -= gcInfos.poll().getDuration();
+					} else {
+						break;
+					}
+				}
+
+				// extract garbage collection information from notification.
+				GarbageCollectionNotificationInfo gcNotificationInfo = GarbageCollectionNotificationInfo.from((CompositeData) notification.getUserData());
+				GcInfo gcInfo = gcNotificationInfo.getGcInfo();
+				gcInfos.add(gcInfo);
+				gcSum += gcInfo.getDuration();
+				if (System.currentTimeMillis() - lastGcUpdate > 10000) {
+					overflow = false;
+				}
+				if (! overflow) {
+					// maximum heap size the JVM can allocate
+					long maxMemory = RUNTIME.maxMemory();
+
+					// total currently allocated JVM memory
+					long totalMemory = RUNTIME.totalMemory();
+					// amount of memory free in the currently allocated JVM memory
+					long freeMemory = RUNTIME.freeMemory();
+
+					// estimated memory used
+					long used = totalMemory - freeMemory;
+
+					// amount of memory the JVM can still allocate from the OS (upper boundary is the max heap)
+					long freeToAllocateMemory = maxMemory - used;
+
+					// try to prevent OOM
+					overflow = freeToAllocateMemory < MIN_AVAILABLE_MEM_BEFORE_OVERFLOWING;
+					lastGcUpdate = System.currentTimeMillis();
+				}
+				if (! overflow && gcSum > 2500) {
+					overflow = true;
+					lastGcUpdate = System.currentTimeMillis();
+				}
+			}, null, null);
+		}
+	}
 
 	public MemoryOverflowModel() {
 		memory = new LinkedHashModel(LARGE_BLOCK * 2);
@@ -159,7 +212,7 @@ abstract class MemoryOverflowModel extends AbstractModel {
 				if (buffer.size() >= 1024) {
 					ret |= getDelegate().addAll(buffer);
 					buffer.clear();
-					innerCheckMemoryOverflow();
+					checkMemoryOverflow();
 				}
 			}
 			if (!buffer.isEmpty()) {
@@ -175,6 +228,7 @@ abstract class MemoryOverflowModel extends AbstractModel {
 
 	@Override
 	public boolean remove(Resource subj, IRI pred, Value obj, Resource... contexts) {
+		checkMemoryOverflow();
 		return getDelegate().remove(subj, pred, obj, contexts);
 	}
 
@@ -277,103 +331,16 @@ abstract class MemoryOverflowModel extends AbstractModel {
 		}
 	}
 
-	static class GcInfo {
-		long count;
-		long time;
-	}
-
-	private final Map<String, GcInfo> prevGcInfo = new ConcurrentHashMap<>();
-
-	private synchronized boolean highGcLoad() {
-		boolean highLoad = false;
-
-		// get all garbage collector MXBeans.
-		List<GarbageCollectorMXBean> gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
-		for (GarbageCollectorMXBean gcBean : gcBeans) {
-			long count = gcBean.getCollectionCount();
-			long time = gcBean.getCollectionTime();
-
-			GcInfo prevInfo = prevGcInfo.get(gcBean.getName());
-			if (prevInfo != null) {
-				long countDiff = count - prevInfo.count;
-				long timeDiff = time - prevInfo.time;
-				if (countDiff != 0) {
-					double gcLoad = (double) timeDiff / countDiff;
-					// TODO find good threshold
-					if (gcLoad > 100) {
-						highLoad = true;
-					}
-				}
-			} else {
-				prevInfo = new GcInfo();
-				prevGcInfo.put(gcBean.getName(), prevInfo);
-			}
-			prevInfo.count = count;
-			prevInfo.time = time;
-		}
-		return highLoad;
-	}
-
-	private void checkMemoryOverflow() {
+	private synchronized void checkMemoryOverflow() {
 		if (disk == getDelegate()) {
 			return;
 		}
 
-		int size = size() + 1;
-		if (size >= LARGE_BLOCK && size % LARGE_BLOCK == 0) {
-			innerCheckMemoryOverflow();
-		}
-	}
-
-	private synchronized void innerCheckMemoryOverflow() {
-		if (disk == null) {
-			if (highGcLoad()) {
-				logger.debug("syncing at {} triples due to gc load.", size());
-				overflowToDisk();
-				System.gc();
-				return;
-			}
-
-			// maximum heap size the JVM can allocate
-			long maxMemory = RUNTIME.maxMemory();
-
-			// total currently allocated JVM memory
-			long totalMemory = RUNTIME.totalMemory();
-
-			// amount of memory free in the currently allocated JVM memory
-			long freeMemory = RUNTIME.freeMemory();
-
-			// estimated memory used
-			long used = totalMemory - freeMemory;
-
-			// amount of memory the JVM can still allocate from the OS (upper boundary is the max heap)
-			long freeToAllocateMemory = maxMemory - used;
-
-			if (baseline > 0) {
-				long blockSize = used - baseline;
-				if (blockSize > maxBlockSize) {
-					maxBlockSize = blockSize;
-				}
-				if (overflow && freeToAllocateMemory < MIN_AVAILABLE_MEM_BEFORE_OVERFLOWING * 2) {
-					// stricter memory requirements to not overflow if other models are overflowing
-					logger.debug("syncing at {} triples. max block size: {}", size(), maxBlockSize);
-					overflowToDisk();
-					System.gc();
-				} else if (freeToAllocateMemory < MIN_AVAILABLE_MEM_BEFORE_OVERFLOWING ||
-					freeToAllocateMemory < Math.min(0.15 * maxMemory, maxBlockSize)) {
-					// Sync if either the estimated size of the next block is larger than remaining memory, or
-					// if less than 15% of the heap is still free (this last condition to avoid GC overhead limit)
-
-					logger.debug("syncing at {} triples. max block size: {}", size(), maxBlockSize);
-					overflowToDisk();
-					System.gc();
-				} else {
-					if (overflow) {
-						overflow = false;
-					}
-				}
-			}
-			baseline = used;
+		if (overflow) {
+			logger.debug("syncing at {} triples due to gc load", size());
+			overflowToDisk();
+			System.gc();
+			return;
 		}
 	}
 
