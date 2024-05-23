@@ -1025,12 +1025,12 @@ class ValueStore extends AbstractValueFactory {
 
 							hashVal.mv_data(hashBb);
 							// delete HASH+ID -> [] association
-							mdb_del(txn, dbi, hashVal, null);
+							E(mdb_del(txn, dbi, hashVal, null));
 						}
 					} else {
 						// delete value -> ID association
 						dataVal.mv_data(dataBuffer);
-						mdb_del(txn, dbi, dataVal, null);
+						E(mdb_del(txn, dbi, dataVal, null));
 					}
 
 					// does not delete ID -> value association
