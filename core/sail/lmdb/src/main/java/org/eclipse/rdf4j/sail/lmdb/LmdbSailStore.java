@@ -335,6 +335,10 @@ class LmdbSailStore implements SailStore {
 		};
 	}
 
+	TripleStore getTripleStore() {
+		return tripleStore;
+	}
+
 	/**
 	 * Creates a statement iterator based on the supplied pattern.
 	 *

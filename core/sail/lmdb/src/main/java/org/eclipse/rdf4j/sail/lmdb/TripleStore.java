@@ -690,8 +690,10 @@ class TripleStore implements Closeable {
 
 				double cardinality = 0;
 				for (boolean explicit : new boolean[] { true, false }) {
-					Arrays.fill(s.avgRowsPerValue, 1.0);
-					Arrays.fill(s.avgRowsPerValueCounts, 0);
+					for (int bucket = 0; bucket < Statistics.MAX_BUCKETS; bucket++) {
+						Arrays.fill(s.avgRowsPerValue[bucket], 1.0);
+						Arrays.fill(s.avgRowsPerValueCounts[bucket], 0);
+					}
 
 					keyBuf.clear();
 					index.getMinKey(keyBuf, subj, pred, obj, context);
@@ -768,10 +770,11 @@ class TripleStore implements Closeable {
 												s.counts[i]++;
 											} else {
 												long diff = s.values[i] - s.lastValues[bucket][i];
-												s.avgRowsPerValueCounts[i]++;
-												s.avgRowsPerValue[i] = (s.avgRowsPerValue[i]
-														* (s.avgRowsPerValueCounts[i] - 1) +
-														(double) s.counts[i] / diff) / s.avgRowsPerValueCounts[i];
+												s.avgRowsPerValueCounts[bucket][i]++;
+												s.avgRowsPerValue[bucket][i] = (s.avgRowsPerValue[bucket][i]
+														* (s.avgRowsPerValueCounts[bucket][i] - 1) +
+														(double) s.counts[i] / diff)
+														/ s.avgRowsPerValueCounts[bucket][i];
 												s.counts[i] = 0;
 											}
 										}
@@ -804,7 +807,8 @@ class TripleStore implements Closeable {
 										.max(s.startValues[bucket][pos] - s.lastValues[bucket - 1][pos], 0);
 								// estimate number of elements between last element of previous bucket and first element
 								// of current bucket
-								cardinality += s.avgRowsPerValue[pos] * diffBetweenGroups;
+								cardinality += (s.avgRowsPerValue[bucket - 1][pos] + s.avgRowsPerValue[bucket][pos])
+										/ 2 * diffBetweenGroups;
 							}
 						}
 					} finally {

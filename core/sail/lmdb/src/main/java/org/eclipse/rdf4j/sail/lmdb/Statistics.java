@@ -23,14 +23,14 @@ class Statistics {
 	/**
 	 * Number of samples for each bucket.
 	 */
-	static final int MAX_SAMPLES_PER_BUCKET = 100;
+	static final int MAX_SAMPLES_PER_BUCKET = 200;
 
 	final long[][] startValues = new long[MAX_BUCKETS + 1][4];
 	final long[][] lastValues = new long[MAX_BUCKETS][4];
 	final long[] values = new long[4];
 	final long[] minValues = new long[4];
 	final long[] maxValues = new long[4];
-	final double[] avgRowsPerValue = new double[4];
-	final long[] avgRowsPerValueCounts = new long[4];
+	final double[][] avgRowsPerValue = new double[MAX_BUCKETS][4];
+	final long[][] avgRowsPerValueCounts = new long[MAX_BUCKETS][4];
 	final long[] counts = new long[4];
 }
