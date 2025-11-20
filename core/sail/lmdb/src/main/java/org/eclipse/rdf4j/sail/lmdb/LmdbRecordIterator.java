@@ -11,6 +11,7 @@
 package org.eclipse.rdf4j.sail.lmdb;
 
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.E;
+import static org.lwjgl.util.lmdb.LMDB.MDB_FIRST;
 import static org.lwjgl.util.lmdb.LMDB.MDB_FIRST_DUP;
 import static org.lwjgl.util.lmdb.LMDB.MDB_GET_BOTH_RANGE;
 import static org.lwjgl.util.lmdb.LMDB.MDB_NEXT;
@@ -141,12 +142,7 @@ class LmdbRecordIterator implements RecordIterator {
 		try {
 			this.txnRefVersion = txnRef.version();
 			this.txn = txnRef.get();
-
-			try (MemoryStack stack = MemoryStack.stackPush()) {
-				PointerBuffer pp = stack.mallocPointer(1);
-				E(mdb_cursor_open(txn, dbi, pp));
-				cursor = pp.get(0);
-			}
+			this.cursor = txnRef.getCursor(dbi);
 		} finally {
 			txnLockManager.unlockRead(readStamp);
 		}
@@ -228,7 +224,7 @@ class LmdbRecordIterator implements RecordIterator {
 					}
 				} else {
 					// set cursor to first item
-					lastResult = mdb_cursor_get(cursor, keyData, valueData, MDB_NEXT);
+					lastResult = mdb_cursor_get(cursor, keyData, valueData, MDB_FIRST);
 				}
 			}
 
@@ -292,7 +288,7 @@ class LmdbRecordIterator implements RecordIterator {
 			}
 			try {
 				if (!closed) {
-					mdb_cursor_close(cursor);
+					txnRef.returnCursor(dbi, cursor);
 					pool.free(keyData);
 					pool.free(valueData);
 					if (minKeyBuf != null) {
