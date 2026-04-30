@@ -18,19 +18,21 @@ class Statistics {
 	/**
 	 * Number of buckets used to sample average distances of keys.
 	 */
-	static final int MAX_BUCKETS = 3;
+	static final int MAX_BUCKETS = 5;
 
 	/**
 	 * Number of samples for each bucket.
 	 */
 	static final int MAX_SAMPLES_PER_BUCKET = 100;
 
-	final long[][] startValues = new long[MAX_BUCKETS + 1][4];
+	final long[][] startValues = new long[MAX_BUCKETS][4];
 	final long[][] lastValues = new long[MAX_BUCKETS][4];
 	final long[] values = new long[4];
 	final long[] minValues = new long[4];
 	final long[] maxValues = new long[4];
-	final double[] avgRowsPerValue = new double[4];
-	final long[] avgRowsPerValueCounts = new long[4];
-	final long[] counts = new long[4];
+	final long[][] distanceInBucket = new long[MAX_BUCKETS][4];
+	final long[][] rowsInBucket = new long[MAX_BUCKETS][4];
+	final long[] totalDistance = new long[4];
+	final long[] totalRows = new long[4];
+	final long[] samples = new long[MAX_BUCKETS];
 }
