@@ -24,5 +24,6 @@
 		<module>elasticsearch</module>
 		<module>elasticsearch-store</module>
 		<module>extensible-store</module>
-	</modules>
+    <module>ha-sail</module>
+  </modules>
 </project>
