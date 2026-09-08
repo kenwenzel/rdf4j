@@ -11,9 +11,10 @@
 package org.eclipse.rdf4j.sail.lmdb.util;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.NoSuchElementException;
 
+import org.eclipse.collections.api.map.primitive.MutableLongIntMap;
+import org.eclipse.collections.impl.map.mutable.primitive.LongIntHashMap;
 import org.eclipse.rdf4j.sail.lmdb.Varint;
 
 /**
@@ -49,132 +50,77 @@ public final class VarintTupleIO {
 	public static final class Encoder {
 		final int elements;
 		final ByteBuffer out;
-		final int[] reusePositions;;
-		int lastTuplePosition;
-		boolean deltaEncodeNextTuple;
+		final MutableLongIntMap reusePositionsMap = new LongIntHashMap();
+		int reuseOffset = 0;
+		boolean encodeNextTuple = false;
 
-		Encoder(int elements, ByteBuffer out, int[] reusePositions, int lastTuplePosition) {
+		Encoder(int elements, ByteBuffer out) {
 			this.elements = elements;
 			this.out = out;
-			this.lastTuplePosition = lastTuplePosition;
-			this.reusePositions = reusePositions.clone();
 		}
 
 		public void resetDeltaEncoding() {
-			this.deltaEncodeNextTuple = false;
+			this.reusePositionsMap.clear();
+			this.reuseOffset = out.position();
+			this.encodeNextTuple = false;
 		}
 
 		public void append(ByteBuffer tuple) {
-			if (!deltaEncodeNextTuple) {
-				int pos = out.position();
-				lastTuplePosition = pos;
-				out.put(tuple);
-				reusePositions[0] = pos;
-				for (int i = 1; i < elements; i++) {
-					reusePositions[i] = reusePositions[i - 1] + Varint.firstToLength(out.get(reusePositions[i - 1]));
-				}
-				deltaEncodeNextTuple = true;
-				return;
-			}
-			int rawPosition = lastTuplePosition;
 			int otherValuePosition = tuple.position();
 			for (int i = 0; i < elements; i++) {
-				final int currentValuePosition = reusePositions[i];
-				final byte firtByte = out.get(currentValuePosition);
-				final int length = Varint.firstToLength(firtByte);
-				if (out.get(rawPosition) == 0) {
-					// Zero is a reuse marker, not the encoded value itself.
-					rawPosition++;
-				} else {
-					rawPosition += length;
+				final int otherLength = Varint.firstToLength(tuple.get(otherValuePosition));
+
+				boolean encode = encodeNextTuple && otherLength > 2;
+				if (encode) {
+					final long otherValue = Varint.readUnsigned(tuple, otherValuePosition);
+					int pos = reusePositionsMap.getIfAbsent(otherValue, -1);
+					if (pos != -1) {
+						out.put((byte) 0);
+						Varint.writeUnsigned(out, pos);
+						otherValuePosition += otherLength;
+						continue;
+					} else {
+						reusePositionsMap.put(otherValue, out.position() - reuseOffset);
+					}
 				}
 
-				byte otherFirstByte = tuple.get(otherValuePosition);
-
-				boolean reuse;
-				if (firtByte == otherFirstByte) {
-					int result = length == 1 ? 0
-							: compareRegion(out, currentValuePosition + 1, tuple,
-									otherValuePosition + 1, length - 1);
-					reuse = result == 0;
-				} else {
-					reuse = false;
-				}
-				int otherLength;
-				if (reuse) {
-					out.put((byte) 0);
-					otherLength = length;
-				} else {
-					var pos = out.position();
-					reusePositions[i] = pos;
-					otherLength = Varint.firstToLength(otherFirstByte);
-					out.put(pos, tuple, otherValuePosition, otherLength);
-					out.position(pos + otherLength);
-				}
+				int pos = out.position();
+				out.put(pos, tuple, otherValuePosition, otherLength);
+				out.position(pos + otherLength);
 				otherValuePosition += otherLength;
 			}
-			lastTuplePosition = rawPosition;
+			encodeNextTuple = true;
 		}
 
 		public void appendNextTuple(VarintTupleIO input) {
 			ByteBuffer buffer = input.getBuffer();
-			if (!deltaEncodeNextTuple) {
-				lastTuplePosition = out.position();
-				for (int i = 0; i < elements; i++) {
-					if (!input.next()) {
-						throw new NoSuchElementException("No element at index " + i);
-					}
-					int otherValuePosition = buffer.position();
-					final int otherLength = Varint.firstToLength(buffer.get(otherValuePosition));
-					int pos = out.position();
-					reusePositions[i] = pos;
-					out.put(pos, buffer, otherValuePosition, otherLength);
-					out.position(pos + otherLength);
-				}
-				input.nextTuple();
-				deltaEncodeNextTuple = true;
-				return;
-			}
-			int rawPosition = lastTuplePosition;
 			for (int i = 0; i < elements; i++) {
 				if (!input.next()) {
 					throw new NoSuchElementException("No element at index " + i);
 				}
 
-				final int currentValuePosition = reusePositions[i];
-				final byte firtByte = out.get(currentValuePosition);
-				final int length = Varint.firstToLength(firtByte);
-				if (out.get(rawPosition) == 0) {
-					// Zero is a reuse marker, not the encoded value itself.
-					rawPosition++;
-				} else {
-					rawPosition += length;
+				final int otherValuePosition = buffer.position();
+				final int otherLength = Varint.firstToLength(buffer.get(otherValuePosition));
+
+				boolean encode = encodeNextTuple && otherLength > 2;
+				if (encode) {
+					final long otherValue = Varint.readUnsigned(buffer, otherValuePosition);
+					int pos = reusePositionsMap.getIfAbsent(otherValue, -1);
+					if (pos != -1) {
+						out.put((byte) 0);
+						Varint.writeUnsigned(out, pos);
+						continue;
+					} else {
+						reusePositionsMap.put(otherValue, out.position() - reuseOffset);
+					}
 				}
 
-				int otherValuePosition = buffer.position();
-				byte otherFirstByte = buffer.get(otherValuePosition);
-
-				boolean reuse;
-				if (firtByte == otherFirstByte) {
-					int result = length == 1 ? 0
-							: compareRegion(out, currentValuePosition + 1, buffer,
-									otherValuePosition + 1, length - 1);
-					reuse = result == 0;
-				} else {
-					reuse = false;
-				}
-				if (reuse) {
-					out.put((byte) 0);
-				} else {
-					var pos = out.position();
-					reusePositions[i] = pos;
-					int otherLength = Varint.firstToLength(otherFirstByte);
-					out.put(pos, buffer, otherValuePosition, otherLength);
-					out.position(pos + otherLength);
-				}
+				int pos = out.position();
+				out.put(pos, buffer, otherValuePosition, otherLength);
+				out.position(pos + otherLength);
 			}
-			lastTuplePosition = rawPosition;
 			input.nextTuple();
+			encodeNextTuple = true;
 		}
 	}
 
@@ -183,9 +129,6 @@ public final class VarintTupleIO {
 
 	/** Buffer containing the encoded tuple data. */
 	private final ByteBuffer buffer;
-
-	/** Buffer positions of the most recently decoded values, indexed by element position within a tuple. */
-	private final int[] reusePositions;
 
 	/** Index of the current element within the tuple, or {@code -1} before the first element of a tuple. */
 	private int index = -1;
@@ -215,7 +158,6 @@ public final class VarintTupleIO {
 		}
 		this.elements = elements;
 		this.buffer = buffer;
-		this.reusePositions = new int[elements];
 		this.tupleStartPosition = buffer.position();
 	}
 
@@ -330,11 +272,11 @@ public final class VarintTupleIO {
 	private void resolveReuse() {
 		byte first = buffer.get(nextPosition);
 		if (first == 0) {
-			nextPosition += 1; // resume after the reuse marker
-			buffer.position(reusePositions[index]);
+			long reusePos = Varint.readUnsigned(buffer, nextPosition + 1); // skip the reuse marker and its varint
+			nextPosition += 1 + Varint.calcLengthUnsigned(reusePos); // resume after the reuse marker
+			buffer.position((int) reusePos);
 		} else {
 			nextPosition += Varint.firstToLength(first);
-			reusePositions[index] = buffer.position();
 		}
 	}
 
@@ -360,7 +302,7 @@ public final class VarintTupleIO {
 			boolean reuse = buffer.get(rawPosition) == 0;
 			final int currentValuePosition;
 			if (reuse) {
-				currentValuePosition = reusePositions[i];
+				currentValuePosition = (int) Varint.readUnsigned(buffer, rawPosition + 1);
 			} else {
 				currentValuePosition = rawPosition;
 			}
@@ -380,7 +322,7 @@ public final class VarintTupleIO {
 			}
 
 			if (reuse) {
-				rawPosition++;
+				rawPosition += 1 + Varint.calcLengthUnsigned(currentValuePosition);
 			} else {
 				rawPosition += length;
 			}
@@ -400,20 +342,25 @@ public final class VarintTupleIO {
 
 	public Encoder createEncoder(ByteBuffer out) {
 		int outStartPosition = out.position();
-		int[] encoderReusePositions = reusePositions.clone();
-		boolean deltaEncodeNextTuple = false;
+		var encoder = new Encoder(elements, out);
 		if (tupleStartPosition > 0) {
 			out.put(outStartPosition, buffer, 0, tupleStartPosition);
 			out.position(outStartPosition + tupleStartPosition);
-			if (outStartPosition > 0) {
-				for (int i = 0; i < elements; i++) {
-					encoderReusePositions[i] += outStartPosition;
+
+			int pos = 0;
+			while (pos < tupleStartPosition) {
+				long value = Varint.readUnsigned(buffer, pos);
+				if (value == 0) {
+					int reusePos = (int) Varint.readUnsigned(buffer, pos + 1);
+					pos += 1 + Varint.calcLengthUnsigned(reusePos);
+					continue;
 				}
+				encoder.reusePositionsMap.put(value, pos + outStartPosition);
+				pos += Varint.calcLengthUnsigned(value);
 			}
-			deltaEncodeNextTuple = true;
+
+			encoder.encodeNextTuple = true;
 		}
-		var encoder = new Encoder(elements, out, encoderReusePositions, tupleStartPosition + outStartPosition);
-		encoder.deltaEncodeNextTuple = deltaEncodeNextTuple;
 		return encoder;
 	}
 }
