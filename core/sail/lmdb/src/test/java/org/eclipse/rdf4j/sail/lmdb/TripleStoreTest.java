@@ -688,8 +688,8 @@ public class TripleStoreTest {
 						long[] quad;
 						while ((quad = it.next()) != null) {
 							String quadStr = quad[0] + "," + quad[1] + "," + quad[2] + "," + quad[3];
-							assertTrue("Expected quad in index '" + indexName + "': " + quadStr,
-									expectedInIndex.remove(quadStr));
+							boolean wasRemoved = expectedInIndex.remove(quadStr);
+							assertTrue("Expected quad in index '" + indexName + "': " + quadStr, wasRemoved);
 						}
 					}
 					assertEquals("All expected quads should have been found in index '" + indexName + "'", 0,

@@ -540,7 +540,8 @@ class ValueStore extends AbstractValueFactory {
 				ByteBuffer keyBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
 				ByteBuffer dataBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
 				MDBVal dataValue = MDBVal.calloc(stack);
-				ByteBuffer mergedBuf = stack.malloc(600);
+				ByteBuffer keyScratch = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
+				ByteBuffer valueScratch = stack.malloc(600);
 				PointerBuffer cursorHandle = stack.mallocPointer(1);
 				for (String fieldSeq : addedIndexSpecs) {
 					logger.debug("Initializing new index '{}'...", fieldSeq);
@@ -569,8 +570,7 @@ class ValueStore extends AbstractValueFactory {
 							long cursor = cursorHandle.get(0);
 							try {
 								E(Chunks.mergeChunk(cursor, 4 - addedIndex.getIndexSplitPosition(), keyValue, dataValue,
-										dataBuf,
-										mergedBuf));
+										keyBuf, dataBuf, keyScratch, valueScratch));
 							} finally {
 								mdb_cursor_close(cursor);
 							}
@@ -1287,7 +1287,8 @@ class ValueStore extends AbstractValueFactory {
 			MDBVal dataVal = MDBVal.calloc(stack);
 			ByteBuffer keyBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
 			ByteBuffer valueBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-			ByteBuffer mergedBuf = stack.malloc(500 + TripleIndex.MAX_KEY_LENGTH);
+			ByteBuffer keyScratch = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
+			ByteBuffer valueScratch = stack.malloc(600);
 
 			mainIndex.getMinEntry(keyBuf, valueBuf, subj, pred, obj, -1);
 			keyBuf.flip();
@@ -1329,8 +1330,8 @@ class ValueStore extends AbstractValueFactory {
 					E(mdb_cursor_open(writeTxn, index.getDB(true), pp));
 					long indexCursor = pp.get(0);
 					try {
-						E(Chunks.mergeChunk(indexCursor, 4 - index.getIndexSplitPosition(), keyVal, dataVal, valueBuf,
-								mergedBuf));
+						E(Chunks.mergeChunk(indexCursor, 4 - index.getIndexSplitPosition(), keyVal, dataVal, keyBuf,
+								valueBuf, keyScratch, valueScratch));
 					} finally {
 						mdb_cursor_close(indexCursor);
 					}
@@ -1637,7 +1638,8 @@ class ValueStore extends AbstractValueFactory {
 		MDBVal keyVal = MDBVal.malloc(stack);
 		ByteBuffer keyBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
 		ByteBuffer valueBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-		ByteBuffer mergedBuf = stack.malloc(500 + TripleIndex.MAX_KEY_LENGTH);
+		ByteBuffer keyScratch = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
+		ByteBuffer valueScratch = stack.malloc(600);
 		PointerBuffer pp = stack.mallocPointer(1);
 
 		long termsCursor = 0;
@@ -1694,7 +1696,7 @@ class ValueStore extends AbstractValueFactory {
 							long indexCursor = pp.get(0);
 							try {
 								Chunks.deleteFromChunk(indexCursor, 4 - index.getIndexSplitPosition(), keyVal, dataVal,
-										valueBuf, mergedBuf);
+										keyBuf, valueBuf, keyScratch, valueScratch);
 							} finally {
 								mdb_cursor_close(indexCursor);
 							}
@@ -1799,7 +1801,8 @@ class ValueStore extends AbstractValueFactory {
 		MDBVal keyVal = null;
 		ByteBuffer keyBuf = null;
 		ByteBuffer valueBuf = null;
-		ByteBuffer mergedBuf = null;
+		ByteBuffer keyScratch = null;
+		ByteBuffer valueScratch = null;
 
 		ByteBuffer revIdBb = stack.malloc(1 + Long.BYTES + 2 + Long.BYTES);
 
@@ -1838,7 +1841,8 @@ class ValueStore extends AbstractValueFactory {
 									keyVal = MDBVal.calloc(stack);
 									keyBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
 									valueBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-									mergedBuf = stack.malloc(500 + TripleIndex.MAX_KEY_LENGTH);
+									keyScratch = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
+									valueScratch = stack.malloc(600);
 								}
 
 								keyBuf.clear();
@@ -1867,8 +1871,8 @@ class ValueStore extends AbstractValueFactory {
 									valueBuf.flip();
 									dataVal.mv_data(valueBuf);
 									Chunks.deleteFromChunk(termsCursor,
-											4 - tripleTermCspoIndex.getIndexSplitPosition(), keyVal, dataVal, valueBuf,
-											mergedBuf);
+											4 - tripleTermCspoIndex.getIndexSplitPosition(), keyVal, dataVal,
+											keyBuf, valueBuf, keyScratch, valueScratch);
 								}
 							} else {
 								// delete id -> value association

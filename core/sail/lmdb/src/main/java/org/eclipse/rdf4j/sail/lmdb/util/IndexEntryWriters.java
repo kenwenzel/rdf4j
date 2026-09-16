@@ -211,7 +211,72 @@ public final class IndexEntryWriters {
 		// int valuePos = value.position();
 		switch (splitIndex) {
 		case 0:
-			key.put((byte) 1); // to ensure key is non-empty
+			if (key != null) {
+				key.put((byte) 1); // to ensure key is non-empty
+			}
+			if (value != null) {
+				Varint.writeUnsigned(value, first);
+				Varint.writeUnsigned(value, second);
+				Varint.writeUnsigned(value, third);
+				Varint.writeUnsigned(value, fourth);
+			}
+			// used to pad the value to a fixed length if needed
+			// fill(value, 4 * (Long.BYTES + 1) - (value.position() - valuePos));
+			break;
+		case 1:
+			if (key != null) {
+				Varint.writeUnsigned(key, first);
+			}
+			if (value != null) {
+				Varint.writeUnsigned(value, second);
+				Varint.writeUnsigned(value, third);
+				Varint.writeUnsigned(value, fourth);
+			}
+			// used to pad the value to a fixed length if needed
+			// fill(value, 3 * (Long.BYTES + 1) - (value.position() - valuePos));
+			break;
+		case 2:
+			if (key != null) {
+				Varint.writeUnsigned(key, first);
+				Varint.writeUnsigned(key, second);
+			}
+			if (value != null) {
+				Varint.writeUnsigned(value, third);
+				Varint.writeUnsigned(value, fourth);
+			}
+			// used to pad the value to a fixed length if needed
+			// fill(value, 2 * (Long.BYTES + 1) - (value.position() - valuePos));
+			break;
+		case 3:
+			if (key != null) {
+				Varint.writeUnsigned(key, first);
+				Varint.writeUnsigned(key, second);
+				Varint.writeUnsigned(key, third);
+			}
+			if (value != null) {
+				Varint.writeUnsigned(value, fourth);
+			}
+			// used to pad the value to a fixed length if needed
+			// fill(value, (Long.BYTES + 1) - (value.position() - valuePos));
+			break;
+		case 4:
+			if (key != null) {
+				Varint.writeUnsigned(key, first);
+				Varint.writeUnsigned(key, second);
+				Varint.writeUnsigned(key, third);
+				Varint.writeUnsigned(key, fourth);
+			}
+			break;
+		default:
+			throw new IllegalArgumentException("Split index must be between 0 and 4 inclusive");
+		}
+	}
+
+	public static void write(ByteBuffer value, int splitIndex, long first, long second, long third,
+			long fourth) {
+		// int valuePos = value.position();
+		switch (splitIndex) {
+		case 0:
 			Varint.writeUnsigned(value, first);
 			Varint.writeUnsigned(value, second);
 			Varint.writeUnsigned(value, third);
@@ -220,7 +285,6 @@ public final class IndexEntryWriters {
 			// fill(value, 4 * (Long.BYTES + 1) - (value.position() - valuePos));
 			break;
 		case 1:
-			Varint.writeUnsigned(key, first);
 			Varint.writeUnsigned(value, second);
 			Varint.writeUnsigned(value, third);
 			Varint.writeUnsigned(value, fourth);
@@ -228,29 +292,18 @@ public final class IndexEntryWriters {
 			// fill(value, 3 * (Long.BYTES + 1) - (value.position() - valuePos));
 			break;
 		case 2:
-			Varint.writeUnsigned(key, first);
-			Varint.writeUnsigned(key, second);
 			Varint.writeUnsigned(value, third);
 			Varint.writeUnsigned(value, fourth);
 			// used to pad the value to a fixed length if needed
 			// fill(value, 2 * (Long.BYTES + 1) - (value.position() - valuePos));
 			break;
 		case 3:
-			Varint.writeUnsigned(key, first);
-			Varint.writeUnsigned(key, second);
-			Varint.writeUnsigned(key, third);
 			Varint.writeUnsigned(value, fourth);
 			// used to pad the value to a fixed length if needed
 			// fill(value, (Long.BYTES + 1) - (value.position() - valuePos));
 			break;
-		case 4:
-			Varint.writeUnsigned(key, first);
-			Varint.writeUnsigned(key, second);
-			Varint.writeUnsigned(key, third);
-			Varint.writeUnsigned(key, fourth);
-			break;
 		default:
-			throw new IllegalArgumentException("Split index must be between 0 and 4 inclusive");
+			throw new IllegalArgumentException("Split index must be between 0 and 3 inclusive");
 		}
 
 	}
@@ -352,98 +405,98 @@ public final class IndexEntryWriters {
 	}
 
 	static boolean[] spocShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, pred > 0, obj > 0, context >= 0 };
+		return new boolean[] { subj > 0, pred > 0, obj > 0, context > 0 };
 	}
 
 	static boolean[] spcoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, pred > 0, context >= 0, obj > 0 };
+		return new boolean[] { subj > 0, pred > 0, context > 0, obj > 0 };
 	}
 
 	static boolean[] sopcShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, obj > 0, pred > 0, context >= 0 };
+		return new boolean[] { subj > 0, obj > 0, pred > 0, context > 0 };
 	}
 
 	static boolean[] socpShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, obj > 0, context >= 0, pred > 0 };
+		return new boolean[] { subj > 0, obj > 0, context > 0, pred > 0 };
 	}
 
 	static boolean[] scpoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, context >= 0, pred > 0, obj > 0 };
+		return new boolean[] { subj > 0, context > 0, pred > 0, obj > 0 };
 	}
 
 	static boolean[] scopShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, context >= 0, obj > 0, pred > 0 };
+		return new boolean[] { subj > 0, context > 0, obj > 0, pred > 0 };
 	}
 
 	static boolean[] psocShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, subj > 0, obj > 0, context >= 0 };
+		return new boolean[] { pred > 0, subj > 0, obj > 0, context > 0 };
 	}
 
 	static boolean[] pscoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, subj > 0, context >= 0, obj > 0 };
+		return new boolean[] { pred > 0, subj > 0, context > 0, obj > 0 };
 	}
 
 	static boolean[] poscShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, obj > 0, subj > 0, context >= 0 };
+		return new boolean[] { pred > 0, obj > 0, subj > 0, context > 0 };
 	}
 
 	static boolean[] pocsShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, obj > 0, context >= 0, subj > 0 };
+		return new boolean[] { pred > 0, obj > 0, context > 0, subj > 0 };
 	}
 
 	static boolean[] pcsoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, context >= 0, subj > 0, obj > 0 };
+		return new boolean[] { pred > 0, context > 0, subj > 0, obj > 0 };
 	}
 
 	static boolean[] pcosShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, context >= 0, obj > 0, subj > 0 };
+		return new boolean[] { pred > 0, context > 0, obj > 0, subj > 0 };
 	}
 
 	static boolean[] ospcShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, subj > 0, pred > 0, context >= 0 };
+		return new boolean[] { obj > 0, subj > 0, pred > 0, context > 0 };
 	}
 
 	static boolean[] oscpShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, subj > 0, context >= 0, pred > 0 };
+		return new boolean[] { obj > 0, subj > 0, context > 0, pred > 0 };
 	}
 
 	static boolean[] opscShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, pred > 0, subj > 0, context >= 0 };
+		return new boolean[] { obj > 0, pred > 0, subj > 0, context > 0 };
 	}
 
 	static boolean[] opcsShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, pred > 0, context >= 0, subj > 0 };
+		return new boolean[] { obj > 0, pred > 0, context > 0, subj > 0 };
 	}
 
 	static boolean[] ocspShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, context >= 0, subj > 0, pred > 0 };
+		return new boolean[] { obj > 0, context > 0, subj > 0, pred > 0 };
 	}
 
 	static boolean[] ocpsShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, context >= 0, pred > 0, subj > 0 };
+		return new boolean[] { obj > 0, context > 0, pred > 0, subj > 0 };
 	}
 
 	static boolean[] cspoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, subj > 0, pred > 0, obj > 0 };
+		return new boolean[] { context > 0, subj > 0, pred > 0, obj > 0 };
 	}
 
 	static boolean[] csopShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, subj > 0, obj > 0, pred > 0 };
+		return new boolean[] { context > 0, subj > 0, obj > 0, pred > 0 };
 	}
 
 	static boolean[] cpsoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, pred > 0, subj > 0, obj > 0 };
+		return new boolean[] { context > 0, pred > 0, subj > 0, obj > 0 };
 	}
 
 	static boolean[] cposShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, pred > 0, obj > 0, subj > 0 };
+		return new boolean[] { context > 0, pred > 0, obj > 0, subj > 0 };
 	}
 
 	static boolean[] cospShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, obj > 0, subj > 0, pred > 0 };
+		return new boolean[] { context > 0, obj > 0, subj > 0, pred > 0 };
 	}
 
 	static boolean[] copsShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, obj > 0, pred > 0, subj > 0 };
+		return new boolean[] { context > 0, obj > 0, pred > 0, subj > 0 };
 	}
 }

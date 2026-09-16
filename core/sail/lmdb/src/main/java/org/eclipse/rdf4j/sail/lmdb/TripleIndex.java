@@ -72,9 +72,9 @@ class TripleIndex {
 		this.indexMap = getIndexes(this.fieldSeq);
 		this.env = env;
 		// open database and use native sort order without comparator
-		dbiExplicit = openDatabaseWithTxn(writeTxn, getName(true), MDB_CREATE | MDB_DUPSORT);
+		dbiExplicit = openDatabaseWithTxn(writeTxn, getName(true), MDB_CREATE);
 		if (createInferredIndex) {
-			dbiInferred = openDatabaseWithTxn(writeTxn, getName(false), MDB_CREATE | MDB_DUPSORT);
+			dbiInferred = openDatabaseWithTxn(writeTxn, getName(false), MDB_CREATE);
 		} else {
 			dbiInferred = -1;
 		}
@@ -210,7 +210,8 @@ class TripleIndex {
 		pred = pred <= 0 ? 0 : pred;
 		obj = obj <= 0 ? 0 : obj;
 		context = context <= 0 ? 0 : context;
-		toEntry(key, value, subj, pred, obj, context);
+		toAnchorKey(key, subj, pred, obj, context);
+		toEntry(null, value, subj, pred, obj, context);
 	}
 
 	void getMaxEntry(ByteBuffer key, ByteBuffer value, long subj, long pred, long obj, long context) {
@@ -218,20 +219,28 @@ class TripleIndex {
 		pred = pred <= 0 ? Long.MAX_VALUE : pred;
 		obj = obj <= 0 ? Long.MAX_VALUE : obj;
 		context = context < 0 ? Long.MAX_VALUE : context;
-		toEntry(key, value, subj, pred, obj, context);
+		toAnchorKey(key, subj, pred, obj, context);
+		toEntry(null, value, subj, pred, obj, context);
 	}
 
 	EntryMatcher createMatcher(long subj, long pred, long obj, long context) {
-		ByteBuffer key = ByteBuffer.allocate(Math.max(1, indexSplitPosition) * (Long.BYTES + 1));
+		subj = subj <= 0 ? 0 : subj;
+		pred = pred <= 0 ? 0 : pred;
+		obj = obj <= 0 ? 0 : obj;
+		context = context <= 0 ? 0 : context;
+		ByteBuffer key = ByteBuffer.allocate(4 * (Long.BYTES + 1));
 		ByteBuffer value = ByteBuffer.allocate((4 - indexSplitPosition) * (Long.BYTES + 1));
-		toEntry(key, value, subj == -1 ? 0 : subj, pred == -1 ? 0 : pred, obj == -1 ? 0 : obj,
-				context == -1 ? 0 : context);
+		toEntry(key, value, subj, pred, obj, context);
 		return new EntryMatcher(indexSplitPosition, key.array(), value.array(),
 				matcherFactory.create(subj, pred, obj, context));
 	}
 
 	public int getIndexSplitPosition() {
 		return indexSplitPosition;
+	}
+
+	void toAnchorKey(ByteBuffer key, long subj, long pred, long obj, long context) {
+		entryWriter.write(key, null, 4, subj, pred, obj, context);
 	}
 
 	void toEntry(ByteBuffer key, ByteBuffer value, long subj, long pred, long obj, long context) {
