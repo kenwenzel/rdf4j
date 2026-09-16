@@ -21,7 +21,7 @@ public final class IndexEntryWriters {
 
 	@FunctionalInterface
 	public interface EntryWriter {
-		void write(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context);
+		void write(long[] tuple, long subj, long pred, long obj, long context);
 	}
 
 	@FunctionalInterface
@@ -167,10 +167,6 @@ public final class IndexEntryWriters {
 
 	static final byte[] ZERO_BYTES = new byte[4 * (Long.BYTES + 1)];
 
-	static void fill(ByteBuffer buffer, int length) {
-		buffer.put(ZERO_BYTES, 0, length);
-	}
-
 	public static void read(ByteBuffer key, ByteBuffer value, int indexSplitPosition, long[] values) {
 		switch (indexSplitPosition) {
 		case 0:
@@ -206,244 +202,202 @@ public final class IndexEntryWriters {
 		}
 	}
 
-	public static void write(ByteBuffer key, ByteBuffer value, int splitIndex, long first, long second, long third,
-			long fourth) {
-		// int valuePos = value.position();
-		switch (splitIndex) {
-		case 0:
-			key.put((byte) 1); // to ensure key is non-empty
-			Varint.writeUnsigned(value, first);
-			Varint.writeUnsigned(value, second);
-			Varint.writeUnsigned(value, third);
-			Varint.writeUnsigned(value, fourth);
-			// used to pad the value to a fixed length if needed
-			// fill(value, 4 * (Long.BYTES + 1) - (value.position() - valuePos));
-			break;
-		case 1:
-			Varint.writeUnsigned(key, first);
-			Varint.writeUnsigned(value, second);
-			Varint.writeUnsigned(value, third);
-			Varint.writeUnsigned(value, fourth);
-			// used to pad the value to a fixed length if needed
-			// fill(value, 3 * (Long.BYTES + 1) - (value.position() - valuePos));
-			break;
-		case 2:
-			Varint.writeUnsigned(key, first);
-			Varint.writeUnsigned(key, second);
-			Varint.writeUnsigned(value, third);
-			Varint.writeUnsigned(value, fourth);
-			// used to pad the value to a fixed length if needed
-			// fill(value, 2 * (Long.BYTES + 1) - (value.position() - valuePos));
-			break;
-		case 3:
-			Varint.writeUnsigned(key, first);
-			Varint.writeUnsigned(key, second);
-			Varint.writeUnsigned(key, third);
-			Varint.writeUnsigned(value, fourth);
-			// used to pad the value to a fixed length if needed
-			// fill(value, (Long.BYTES + 1) - (value.position() - valuePos));
-			break;
-		case 4:
-			Varint.writeUnsigned(key, first);
-			Varint.writeUnsigned(key, second);
-			Varint.writeUnsigned(key, third);
-			Varint.writeUnsigned(key, fourth);
-			break;
-		default:
-			throw new IllegalArgumentException("Split index must be between 0 and 4 inclusive");
-		}
-
+	public static void write(long[] tuple, long first, long second, long third,	long fourth) {
+		tuple[0] = first;
+		tuple[1] = second;
+		tuple[2] = third;
+		tuple[3] = fourth;
 	}
 
-	static void spoc(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, subj, pred, obj, context);
+	static void spoc(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, subj, pred, obj, context);
 	}
 
-	static void spco(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, subj, pred, context, obj);
+	static void spco(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, subj, pred, context, obj);
 	}
 
-	static void sopc(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, subj, obj, pred, context);
+	static void sopc(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, subj, obj, pred, context);
 	}
 
-	static void socp(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, subj, obj, context, pred);
+	static void socp(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, subj, obj, context, pred);
 	}
 
-	static void scpo(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, subj, context, pred, obj);
+	static void scpo(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, subj, context, pred, obj);
 	}
 
-	static void scop(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, subj, context, obj, pred);
+	static void scop(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, subj, context, obj, pred);
 	}
 
-	static void psoc(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, pred, subj, obj, context);
+	static void psoc(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, pred, subj, obj, context);
 	}
 
-	static void psco(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, pred, subj, context, obj);
+	static void psco(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, pred, subj, context, obj);
 	}
 
-	static void posc(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, pred, obj, subj, context);
+	static void posc(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, pred, obj, subj, context);
 	}
 
-	static void pocs(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, pred, obj, context, subj);
+	static void pocs(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, pred, obj, context, subj);
 	}
 
-	static void pcso(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, pred, context, subj, obj);
+	static void pcso(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, pred, context, subj, obj);
 	}
 
-	static void pcos(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, pred, context, obj, subj);
+	static void pcos(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, pred, context, obj, subj);
 	}
 
-	static void ospc(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, obj, subj, pred, context);
+	static void ospc(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, obj, subj, pred, context);
 	}
 
-	static void oscp(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, obj, subj, context, pred);
+	static void oscp(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, obj, subj, context, pred);
 	}
 
-	static void opsc(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, obj, pred, subj, context);
+	static void opsc(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, obj, pred, subj, context);
 	}
 
-	static void opcs(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, obj, pred, context, subj);
+	static void opcs(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, obj, pred, context, subj);
 	}
 
-	static void ocsp(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, obj, context, subj, pred);
+	static void ocsp(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, obj, context, subj, pred);
 	}
 
-	static void ocps(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, obj, context, pred, subj);
+	static void ocps(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, obj, context, pred, subj);
 	}
 
-	static void cspo(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, context, subj, pred, obj);
+	static void cspo(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, context, subj, pred, obj);
 	}
 
-	static void csop(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, context, subj, obj, pred);
+	static void csop(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, context, subj, obj, pred);
 	}
 
-	static void cpso(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, context, pred, subj, obj);
+	static void cpso(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, context, pred, subj, obj);
 	}
 
-	static void cpos(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, context, pred, obj, subj);
+	static void cpos(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, context, pred, obj, subj);
 	}
 
-	static void cosp(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, context, obj, subj, pred);
+	static void cosp(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, context, obj, subj, pred);
 	}
 
-	static void cops(ByteBuffer key, ByteBuffer value, int splitIndex, long subj, long pred, long obj, long context) {
-		write(key, value, splitIndex, context, obj, pred, subj);
+	static void cops(long[] tuple, long subj, long pred, long obj, long context) {
+		write(tuple, context, obj, pred, subj);
 	}
 
 	static boolean[] spocShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, pred > 0, obj > 0, context >= 0 };
+		return new boolean[] { subj > 0, pred > 0, obj > 0, context > 0 };
 	}
 
 	static boolean[] spcoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, pred > 0, context >= 0, obj > 0 };
+		return new boolean[] { subj > 0, pred > 0, context > 0, obj > 0 };
 	}
 
 	static boolean[] sopcShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, obj > 0, pred > 0, context >= 0 };
+		return new boolean[] { subj > 0, obj > 0, pred > 0, context > 0 };
 	}
 
 	static boolean[] socpShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, obj > 0, context >= 0, pred > 0 };
+		return new boolean[] { subj > 0, obj > 0, context > 0, pred > 0 };
 	}
 
 	static boolean[] scpoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, context >= 0, pred > 0, obj > 0 };
+		return new boolean[] { subj > 0, context > 0, pred > 0, obj > 0 };
 	}
 
 	static boolean[] scopShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { subj > 0, context >= 0, obj > 0, pred > 0 };
+		return new boolean[] { subj > 0, context > 0, obj > 0, pred > 0 };
 	}
 
 	static boolean[] psocShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, subj > 0, obj > 0, context >= 0 };
+		return new boolean[] { pred > 0, subj > 0, obj > 0, context > 0 };
 	}
 
 	static boolean[] pscoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, subj > 0, context >= 0, obj > 0 };
+		return new boolean[] { pred > 0, subj > 0, context > 0, obj > 0 };
 	}
 
 	static boolean[] poscShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, obj > 0, subj > 0, context >= 0 };
+		return new boolean[] { pred > 0, obj > 0, subj > 0, context > 0 };
 	}
 
 	static boolean[] pocsShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, obj > 0, context >= 0, subj > 0 };
+		return new boolean[] { pred > 0, obj > 0, context > 0, subj > 0 };
 	}
 
 	static boolean[] pcsoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, context >= 0, subj > 0, obj > 0 };
+		return new boolean[] { pred > 0, context > 0, subj > 0, obj > 0 };
 	}
 
 	static boolean[] pcosShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { pred > 0, context >= 0, obj > 0, subj > 0 };
+		return new boolean[] { pred > 0, context > 0, obj > 0, subj > 0 };
 	}
 
 	static boolean[] ospcShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, subj > 0, pred > 0, context >= 0 };
+		return new boolean[] { obj > 0, subj > 0, pred > 0, context > 0 };
 	}
 
 	static boolean[] oscpShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, subj > 0, context >= 0, pred > 0 };
+		return new boolean[] { obj > 0, subj > 0, context > 0, pred > 0 };
 	}
 
 	static boolean[] opscShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, pred > 0, subj > 0, context >= 0 };
+		return new boolean[] { obj > 0, pred > 0, subj > 0, context > 0 };
 	}
 
 	static boolean[] opcsShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, pred > 0, context >= 0, subj > 0 };
+		return new boolean[] { obj > 0, pred > 0, context > 0, subj > 0 };
 	}
 
 	static boolean[] ocspShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, context >= 0, subj > 0, pred > 0 };
+		return new boolean[] { obj > 0, context > 0, subj > 0, pred > 0 };
 	}
 
 	static boolean[] ocpsShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { obj > 0, context >= 0, pred > 0, subj > 0 };
+		return new boolean[] { obj > 0, context > 0, pred > 0, subj > 0 };
 	}
 
 	static boolean[] cspoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, subj > 0, pred > 0, obj > 0 };
+		return new boolean[] { context > 0, subj > 0, pred > 0, obj > 0 };
 	}
 
 	static boolean[] csopShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, subj > 0, obj > 0, pred > 0 };
+		return new boolean[] { context > 0, subj > 0, obj > 0, pred > 0 };
 	}
 
 	static boolean[] cpsoShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, pred > 0, subj > 0, obj > 0 };
+		return new boolean[] { context > 0, pred > 0, subj > 0, obj > 0 };
 	}
 
 	static boolean[] cposShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, pred > 0, obj > 0, subj > 0 };
+		return new boolean[] { context > 0, pred > 0, obj > 0, subj > 0 };
 	}
 
 	static boolean[] cospShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, obj > 0, subj > 0, pred > 0 };
+		return new boolean[] { context > 0, obj > 0, subj > 0, pred > 0 };
 	}
 
 	static boolean[] copsShouldMatch(long subj, long pred, long obj, long context) {
-		return new boolean[] { context >= 0, obj > 0, pred > 0, subj > 0 };
+		return new boolean[] { context > 0, obj > 0, pred > 0, subj > 0 };
 	}
 }

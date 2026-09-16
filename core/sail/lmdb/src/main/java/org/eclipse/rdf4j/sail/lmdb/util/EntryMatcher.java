@@ -64,10 +64,6 @@ public class EntryMatcher {
 		return matches(new VarintTupleIO(keyElements, key), new VarintTupleIO(valueElements, value));
 	}
 
-	public boolean matchesKey(VarintTupleIO key) {
-		return keyMatcher.matches(key);
-	}
-
 	public boolean matchesValue(VarintTupleIO value) {
 		return valueMatcher.matches(value);
 	}

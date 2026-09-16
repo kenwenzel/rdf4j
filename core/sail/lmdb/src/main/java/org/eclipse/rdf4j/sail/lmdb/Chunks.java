@@ -12,12 +12,10 @@ package org.eclipse.rdf4j.sail.lmdb;
 
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.E;
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.compareRegion;
-import static org.lwjgl.util.lmdb.LMDB.MDB_GET_BOTH_RANGE;
 import static org.lwjgl.util.lmdb.LMDB.MDB_KEYEXIST;
-import static org.lwjgl.util.lmdb.LMDB.MDB_LAST_DUP;
-import static org.lwjgl.util.lmdb.LMDB.MDB_NOOVERWRITE;
-import static org.lwjgl.util.lmdb.LMDB.MDB_PREV_DUP;
+import static org.lwjgl.util.lmdb.LMDB.MDB_PREV;
 import static org.lwjgl.util.lmdb.LMDB.MDB_SET;
+import static org.lwjgl.util.lmdb.LMDB.MDB_SET_RANGE;
 import static org.lwjgl.util.lmdb.LMDB.MDB_SUCCESS;
 import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_del;
 import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_get;
@@ -26,7 +24,8 @@ import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_put;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
-import org.eclipse.rdf4j.sail.lmdb.util.VarintTupleIO;
+import org.eclipse.rdf4j.sail.lmdb.util.ChunkInput;
+import org.eclipse.rdf4j.sail.lmdb.util.ChunkOutput;
 import org.lwjgl.util.lmdb.MDBVal;
 
 /**
@@ -34,112 +33,107 @@ import org.lwjgl.util.lmdb.MDBVal;
  */
 public class Chunks {
 	/**
-	 * Maximum number of bytes to keep in the first encoded output chunk before spilling remaining tuples into a second
-	 * chunk.
+	 * Maximum number of tuples to store in a single chunk. When a chunk exceeds this size, it is split into two chunks.
 	 */
-	public static final int MAX_CHUNK_SIZE = 100; // 511 - TripleIndex.MAX_KEY_LENGTH;
+	public static final int MAX_CHUNK_SIZE = 64;
 
 	/**
 	 * Inserts a tuple into the sorted duplicate-value chunks for the current key, rewriting the affected chunk when
 	 * needed to preserve ordering and split oversized chunks.
 	 *
-	 * @param cursor      the LMDB cursor positioned on the duplicates for the key
-	 * @param elements    the number of tuple elements encoded in each chunk entry
-	 * @param keyVal      the key buffer used for cursor operations
-	 * @param dataVal     the data buffer used for cursor operations
-	 * @param newValueBuf the encoded tuple to insert
-	 * @param target      scratch buffer used to encode replacement chunks
+	 * @param cursor       the LMDB cursor positioned on the duplicates for the key
+	 * @param splitPoint   the index at which to split the tuple for chunking
+	 * @param keyVal       the key buffer used for cursor operations
+	 * @param dataVal      the data buffer used for cursor operations
+	 * @param tuple        the encoded tuple to insert
+	 * @param keyScratch   scratch buffer used to encode replacement chunks
+	 * @param valueScratch scratch buffer used to encode replacement chunks
 	 * @return the LMDB result code, or {@link org.lwjgl.util.lmdb.LMDB#MDB_KEYEXIST} when the tuple already exists
 	 * @throws IOException if tuple decoding or encoding fails
 	 */
-	static int mergeChunk(long cursor, int elements, MDBVal keyVal, MDBVal dataVal,
-			ByteBuffer newValueBuf, ByteBuffer target) throws IOException {
+	public static int mergeChunk(long cursor, int splitPoint, MDBVal keyVal, MDBVal dataVal,
+			long[] tuple, ByteBuffer keyScratch, ByteBuffer valueScratch)
+			throws IOException {
+		keyScratch.clear();
+		int keyPrefixLength;
+		for (int i = 0; i < splitPoint; i++) {
+			Varint.writeUnsigned(keyScratch, tuple[i]);
+		}
+		keyPrefixLength = keyScratch.position();
+		for (int i = splitPoint; i < tuple.length; i++) {
+			Varint.writeUnsigned(keyScratch, tuple[i]);
+		}
+		keyScratch.flip();
 
-		dataVal.mv_data(newValueBuf);
-		int rc = E(mdb_cursor_put(cursor, keyVal, dataVal, MDB_NOOVERWRITE));
+		keyVal.mv_data(keyScratch);
+
+		// Position cursor at the anchor key.
+		int rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET));
 		if (rc == MDB_SUCCESS) {
-			return MDB_SUCCESS;
+			return MDB_KEYEXIST;
 		}
 
-		final var keyBuffer = keyVal.mv_data();
-
-		// Position cursor at the first duplicate value for this key that is >= newValueBuf.
-		dataVal.mv_data(newValueBuf);
-		rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_GET_BOTH_RANGE));
-
+		boolean hasExistingChunk = false;
+		ByteBuffer existingKey = null;
+		rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET_RANGE));
 		if (rc == MDB_SUCCESS) {
-			var buffer = dataVal.mv_data();
-			if (compareRegion(newValueBuf, 0, buffer, 0, Math.min(newValueBuf.remaining(), buffer.remaining())) == 0) {
-				// The new value is equal to the first duplicate value >= newValueBuf. The tuple already exists in this
-				// chunk.
-				return MDB_KEYEXIST;
+			E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_PREV));
+			existingKey = keyVal.mv_data();
+			if (compareRegion(keyScratch, 0, existingKey, 0, keyPrefixLength) == 0) {
+				if (compareRegion(keyScratch, 0, existingKey, 0, Math.min(keyScratch.remaining(), existingKey.remaining())) > 0) {
+					hasExistingChunk = true;
+				}
 			}
-			// The new value is smaller than the first duplicate value >= newValueBuf. Step back to the previous
-			// duplicate value.
-			if (E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_PREV_DUP)) != MDB_SUCCESS) {
-				// ignore
-			}
-		} else {
-			E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET));
-			E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_LAST_DUP));
+		}
+
+		if (!hasExistingChunk) {
+			keyVal.mv_data(keyScratch);
+			valueScratch.clear().limit(0);
+			dataVal.mv_data(valueScratch);
+			E(mdb_cursor_put(cursor, keyVal, dataVal, 0));
+			return MDB_SUCCESS;
 		}
 
 		// We are positioned at the first duplicate value < newValueBuf.
 		// Find the correct insertion point for newValueBuf in the selected chunk, and check if it already exists.
-		var existing = new VarintTupleIO(elements, dataVal.mv_data());
-		int diff = existing.seek(newValueBuf);
+		var existing = new ChunkInput(existingKey, dataVal.mv_data(), 4, splitPoint);
+		var chunk1 = new ChunkOutput(MAX_CHUNK_SIZE, splitPoint);
+		int diff = existing.seek(tuple, chunk1);
 		if (diff == 0) {
 			return MDB_KEYEXIST;
 		}
 
-		target.clear();
-
-		// Copy the already-consumed prefix of the selected chunk, then insert newValueBuf, then
-		// continue copying tuples from the selected chunk until the first output chunk is full.
-		var encoder = existing.createEncoder(target);
-		int firstPos = target.position();
-
-		boolean addValueToSecondChunk = false;
-		boolean addedAll = false;
-		if (firstPos < MAX_CHUNK_SIZE) {
-			encoder.append(newValueBuf);
-			addedAll = encoder.appendAllTuples(existing, MAX_CHUNK_SIZE);
-
-			firstPos = target.position();
-		} else {
-			// No room left in the first chunk after copying the prefix; start a second chunk with the new value.
-			addValueToSecondChunk = true;
+		ChunkOutput chunk2 = null;
+		if (! chunk1.addTuple(tuple)) {
+			// The new tuple does not fit in the first chunk; we will need to create a second chunk.
+			chunk2 = new ChunkOutput(MAX_CHUNK_SIZE, splitPoint);
 		}
-
-		if (addValueToSecondChunk || !addedAll && existing.hasNext()) {
-			encoder.resetDeltaEncoding();
-
-			if (addValueToSecondChunk) {
-				encoder.append(newValueBuf);
-			}
-
-			if (existing.hasNext()) {
-				encoder.appendNextTuple(existing);
-				encoder.appendAllTuples(existing, Integer.MAX_VALUE);
+		if (chunk2 != null) {
+			chunk2.addTuple(tuple);
+		}
+		long[] existingTuple;
+		while ((existingTuple = existing.next()) != null) {
+			if (chunk2 != null) {
+				chunk2.addTuple(existingTuple);
+			} else if (! chunk1.addTuple(existingTuple)) {
+				chunk2 = new ChunkOutput(MAX_CHUNK_SIZE, splitPoint);
+				chunk2.addTuple(existingTuple);
 			}
 		}
 
-		int secondPos = target.position();
-
-		// Replace the selected duplicate value with one or two newly encoded duplicate values.
-		E(mdb_cursor_del(cursor, 0));
-
-		keyVal.mv_data(keyBuffer);
-
-		target.position(0);
-		target.limit(firstPos);
-		dataVal.mv_data(target);
+		keyScratch.clear();
+		valueScratch.clear();
+		chunk1.write(keyScratch, valueScratch);
+		keyVal.mv_data(keyScratch.flip());
+		dataVal.mv_data(valueScratch.flip());
 		E(mdb_cursor_put(cursor, keyVal, dataVal, 0));
 
-		if (firstPos < secondPos) {
-			target.position(firstPos);
-			target.limit(secondPos);
-			dataVal.mv_data(target);
+		if (chunk2 != null) {
+			keyScratch.clear();
+			valueScratch.clear();
+			chunk2.write(keyScratch, valueScratch);
+			keyVal.mv_data(keyScratch.flip());
+			dataVal.mv_data(valueScratch.flip());
 			E(mdb_cursor_put(cursor, keyVal, dataVal, 0));
 		}
 
@@ -150,48 +144,111 @@ public class Chunks {
 	 * Removes a tuple from the sorted duplicate-value chunks for the current key.
 	 *
 	 * @param cursor        the LMDB cursor positioned on the duplicates for the key
-	 * @param elements      the number of tuple elements encoded in each chunk entry
+	 * @param splitPoint    the split point used in chunk encoding
 	 * @param keyVal        the key buffer used for cursor operations
 	 * @param dataVal       the data buffer used for cursor operations
-	 * @param valueToDelete the encoded tuple to remove
-	 * @param target        scratch buffer used to encode the remaining tuples in the affected chunk
+	 * @param tuple         the encoded tuple to remove
+	 * @param keyScratch    scratch buffer used to encode replacement chunks
+	 * @param valueScratch  scratch buffer used to encode replacement chunks
 	 * @return {@code true} if the tuple was removed, otherwise {@code false}
 	 * @throws IOException if tuple decoding or encoding fails
 	 */
-	static boolean deleteFromChunk(long cursor, int elements, MDBVal keyVal, MDBVal dataVal,
-			ByteBuffer valueToDelete, ByteBuffer target) throws IOException {
-		int rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_GET_BOTH_RANGE));
-		if (rc != MDB_SUCCESS) {
-			return false;
+	public static boolean deleteFromChunk(long cursor, int splitPoint, MDBVal keyVal, MDBVal dataVal,
+			long[] tuple, ByteBuffer keyScratch, ByteBuffer valueScratch)
+			throws IOException {
+		keyScratch.clear();
+		int keyPrefixLength;
+		for (int i = 0; i < splitPoint; i++) {
+			Varint.writeUnsigned(keyScratch, tuple[i]);
+		}
+		keyPrefixLength = keyScratch.position();
+		for (int i = splitPoint; i < tuple.length; i++) {
+			Varint.writeUnsigned(keyScratch, tuple[i]);
+		}
+		keyScratch.flip();
+
+		keyVal.mv_data(keyScratch);
+
+		boolean isAnchorKey = false;
+		// Position cursor at the anchor key. If the data value is empty, delete the key and return true.
+		int rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET));
+		if (rc == MDB_SUCCESS) {
+			if (dataVal.mv_data().remaining() == 0) {
+				E(mdb_cursor_del(cursor, 0));
+				return true;
+			}
+			isAnchorKey = true;
 		}
 
-		var buffer = dataVal.mv_data();
-		if (compareRegion(valueToDelete, 0, buffer, 0, Math.min(valueToDelete.remaining(), buffer.remaining())) < 0) {
-			// The value to delete is smaller than the first duplicate value >= valueToDelete. Step back to the previous
-			// duplicate value.
-			if (E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_PREV_DUP)) != MDB_SUCCESS) {
-				// ignore
+		if (!isAnchorKey) {
+			boolean hasExistingChunk = false;
+			rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET_RANGE));
+			if (rc == MDB_SUCCESS) {
+				rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_PREV));
+				if (rc == MDB_SUCCESS) {
+					if (compareRegion(keyScratch, 0, keyVal.mv_data(), 0, keyPrefixLength) == 0) {
+						hasExistingChunk = true;
+					}
+				}
+			}
+
+			if (!hasExistingChunk) {
+				return false;
 			}
 		}
 
-		var existing = new VarintTupleIO(elements, dataVal.mv_data());
-		int diff = existing.seek(valueToDelete);
-		if (diff != 0) {
-			return false;
+		if (isAnchorKey && dataVal.mv_data().remaining() == 0) {
+			E(mdb_cursor_del(cursor, 0));
+			return true;
 		}
 
-		existing.resetTuple();
-		target.clear();
-		var encoder = existing.createEncoder(target);
-		existing.skipTuple();
-		while (existing.hasNext()) {
-			encoder.appendNextTuple(existing);
+		var existing = new ChunkInput(keyVal.mv_data(), dataVal.mv_data(), 4, splitPoint);
+		var chunk1 = new ChunkOutput(MAX_CHUNK_SIZE, splitPoint);
+		if (!isAnchorKey) {
+			int diff = existing.seek(tuple, chunk1);
+			if (diff != 0) {
+				return false;
+			}
 		}
-		E(mdb_cursor_del(cursor, 0));
-		if (target.position() > 0) {
-			target.flip();
-			dataVal.mv_data(target);
-			E(mdb_cursor_put(cursor, keyVal, dataVal, 0));
+
+		// skip's the tuple to be deleted
+		existing.next();
+
+		long[] existingTuple;
+		while ((existingTuple = existing.next()) != null) {
+			chunk1.addTuple(existingTuple);
+		}
+		if (isAnchorKey) {
+			E(mdb_cursor_del(cursor, 0));
+		}
+
+		keyScratch.clear();
+		valueScratch.clear();
+		chunk1.write(keyScratch, valueScratch);
+		keyVal.mv_data(keyScratch.flip());
+		dataVal.mv_data(valueScratch.flip());
+		E(mdb_cursor_put(cursor, keyVal, dataVal, 0));
+		return true;
+	}
+
+	public static int compareTuples(long[] a, long[] b) {
+		for (int i = 0; i < a.length; i++) {
+			int cmp = Long.compare(a[i], b[i]);
+			if (cmp != 0) {
+				return cmp;
+			}
+		}
+		return 0;
+	}
+
+	public static boolean matches(long[] pattern, long[] tuple) {
+		if (pattern.length != tuple.length) {
+			return false;
+		}
+		for (int i = 0; i < pattern.length; i++) {
+			if (pattern[i] != -1 && pattern[i] != tuple[i]) {
+				return false;
+			}
 		}
 		return true;
 	}

@@ -772,7 +772,7 @@ final class LmdbBtreeRangeCounter {
 		keyView.clear();
 		keyView.position(keyOffset);
 		keyView.limit(keyOffset + keySize);
-		return matcher.matchesKey(new VarintTupleIO(1, keyView));
+		return matcher.matches(new VarintTupleIO(1, keyView), null);
 	}
 
 	private long duplicateMultiplicity(LmdbPage page, int nodeOffset, int keySize) throws IOException {

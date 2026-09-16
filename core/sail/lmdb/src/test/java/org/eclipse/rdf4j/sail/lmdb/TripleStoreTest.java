@@ -124,59 +124,6 @@ public class TripleStoreTest {
 	}
 
 	@Test
-	public void testAlignedWriteFallbackRemovesSecondaryInferredRowsForPromotions() throws Exception {
-		File fallbackDir = new File(dataDir, "aligned-fallback-store");
-		fallbackDir.mkdirs();
-		try (TripleStore fallbackStore = new TripleStore(fallbackDir, new LmdbStoreConfig("spoc,ospc,psoc"), null)) {
-			long[] subj = { 11 };
-			long[] pred = { 22 };
-			long[] obj = { 33 };
-			long[] context = { 44 };
-
-			fallbackStore.startTransaction();
-			fallbackStore.storeTriple(subj[0], pred[0], obj[0], context[0], false);
-			fallbackStore.commit();
-
-			fallbackStore.startTransaction();
-			TripleIndex mainIndex = getIndexes(fallbackStore).getFirst();
-			long writeTxn = getWriteTxn(fallbackStore);
-			try (MemoryStack stack = MemoryStack.stackPush()) {
-				MDBVal keyVal = MDBVal.malloc(stack);
-				MDBVal dataVal = MDBVal.calloc(stack);
-				ByteBuffer keyBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-				ByteBuffer valueBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-				mainIndex.toEntry(keyBuf, valueBuf, subj[0], pred[0], obj[0], context[0]);
-				keyBuf.flip();
-				valueBuf.flip();
-				keyVal.mv_data(keyBuf);
-				dataVal.mv_data(valueBuf);
-				LmdbUtil.E(mdb_put(writeTxn, mainIndex.getDB(true), keyVal, dataVal, MDB_NOOVERWRITE));
-				assertEquals("Main inferred row should be removed before fallback replay", MDB_SUCCESS,
-						mdb_del(writeTxn, mainIndex.getDB(false), keyVal, dataVal));
-			}
-
-			Method fallBackFromAlignedWrite = TripleStore.class.getDeclaredMethod("fallBackFromAlignedWrite",
-					int[].class, int.class, long[].class, long[].class, long[].class, long[].class, boolean[].class,
-					int.class, int.class, boolean.class, LongIntHashMap.class, IntConsumer.class);
-			fallBackFromAlignedWrite.setAccessible(true);
-			fallBackFromAlignedWrite.invoke(fallbackStore, new int[] { 0 }, 1, subj, pred, obj, context,
-					new boolean[] { true }, 1, 1, true, new LongIntHashMap(), null);
-			fallbackStore.commit();
-
-			try (Txn txn = fallbackStore.getTxnManager().createReadTxn()) {
-				assertEquals("PSOC inferred row should be removed after fallback replay", 0,
-						count(fallbackStore.getTriples(txn, -1, pred[0], -1, -1, false)));
-				assertEquals("OSPC inferred row should be removed after fallback replay", 0,
-						count(fallbackStore.getTriples(txn, -1, -1, obj[0], -1, false)));
-				assertEquals("PSOC explicit row should exist after fallback replay", 1,
-						count(fallbackStore.getTriples(txn, -1, pred[0], -1, -1, true)));
-				assertEquals("OSPC explicit row should exist after fallback replay", 1,
-						count(fallbackStore.getTriples(txn, -1, -1, obj[0], -1, true)));
-			}
-		}
-	}
-
-	@Test
 	public void testLeadingFieldSortPreservesPriorOrderWithinGroups() throws Exception {
 		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingField", int[].class,
 				int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
@@ -591,6 +538,8 @@ public class TripleStoreTest {
 
 		tripleStore.commit();
 
+		assertExistingTriples(preds, expectedByPredicate);
+
 		random = new Random(378245L);
 		subj = 1;
 		try (Txn txn = tripleStore.getTxnManager().createReadTxn()) {
@@ -688,11 +637,11 @@ public class TripleStoreTest {
 						long[] quad;
 						while ((quad = it.next()) != null) {
 							String quadStr = quad[0] + "," + quad[1] + "," + quad[2] + "," + quad[3];
-							assertTrue("Expected quad in index '" + indexName + "': " + quadStr,
-									expectedInIndex.remove(quadStr));
+							boolean wasRemoved = expectedInIndex.remove(quadStr);
+							assertTrue("Expected quad in index '" + indexName + "' for predicate " + pred + ": " + quadStr, wasRemoved);
 						}
 					}
-					assertEquals("All expected quads should have been found in index '" + indexName + "'", 0,
+					assertEquals("All expected quads should have been found in index '" + indexName + "' for predicate " + pred, 0,
 							expectedInIndex.size());
 				}
 			}
