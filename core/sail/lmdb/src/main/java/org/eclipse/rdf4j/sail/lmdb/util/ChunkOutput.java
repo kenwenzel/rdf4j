@@ -5,7 +5,7 @@ import java.util.Arrays;
 
 import org.eclipse.rdf4j.sail.lmdb.Varint;
 
-public class ChunkOutput {
+public final class ChunkOutput {
     final long[] keyTuple = new long[4];
     final long[] valueTuples;
     int valueTuplesIndex;
@@ -30,7 +30,9 @@ public class ChunkOutput {
             System.arraycopy(tuple, 0, keyTuple, 0, 4);
             writeKey = false;
         } else {
-            System.arraycopy(tuple, splitPoint, valueTuples, valueTuplesIndex * valueElements, valueElements);
+            for (int element = 0; element < valueElements; element++) {
+                valueTuples[element * capacity + valueTuplesIndex] = tuple[splitPoint + element];
+            }
             valueTuplesIndex++;
         }
         size++;
@@ -48,21 +50,37 @@ public class ChunkOutput {
         if (size < 2) {
             return;
         }
-        if (valueTuplesIndex > 0) {
-            for (int j = 0; j < valueElements; j++) {
-                long delta = valueTuples[j] - keyTuple[splitPoint + j];
-                byte sign = (byte) (delta < 0 ? 1 : 0);
-                valueBuffer.put(sign);
-                Varint.writeUnsigned(valueBuffer, Math.abs(delta));
+        int[] lengths = new int[valueElements];
+        for (int element = 0; element < valueElements; element++) {
+            int start = valueBuffer.position();
+            long prevValue = keyTuple[splitPoint + element];
+            for (int tupleIndex = 0; tupleIndex < valueTuplesIndex; tupleIndex++ ) {
+                long value = valueTuples[element * capacity + tupleIndex];
+                long delta = value - prevValue;
+                prevValue = value;
             }
-        }
-        for (int i = 1; i < valueTuplesIndex; i++) {
-            for (int j = 0; j < valueElements; j++) {
-                long delta = valueTuples[i * valueElements + j] - valueTuples[(i - 1) * valueElements + j];
-                byte sign = (byte) (delta < 0 ? 1 : 0);
-                valueBuffer.put(sign);
-                Varint.writeUnsigned(valueBuffer, Math.abs(delta));
+            prevValue = keyTuple[splitPoint + element];
+            for (int tupleIndex = 0; tupleIndex < valueTuplesIndex; ) {
+                int signs = 0;
+                int signPos = valueBuffer.position();
+                valueBuffer.put((byte) 0); // placeholder for signs
+                for (int j = 0; j < 8 && tupleIndex < valueTuplesIndex; j++, tupleIndex++) {
+                    long value = valueTuples[element * capacity + tupleIndex];
+                    long delta = value - prevValue;
+                    signs |= (delta < 0 ? 1 : 0) << j;
+                    Varint.writeUnsigned(valueBuffer, Math.abs(delta));
+                    prevValue = value;
+                }
+                valueBuffer.put(signPos, (byte) signs);
             }
+            lengths[element] = valueBuffer.position() - start;
         }
+        // write footer
+        int footerStart = valueBuffer.position();
+        for (int element = 0; element < valueElements; element++) {
+            Varint.writeUnsigned(valueBuffer, lengths[element]);
+        }
+        Varint.writeUnsigned(valueBuffer, valueTuplesIndex);
+        valueBuffer.put((byte)(valueBuffer.position() - footerStart));
     }
 }

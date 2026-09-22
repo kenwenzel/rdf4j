@@ -35,7 +35,7 @@ public class Chunks {
 	/**
 	 * Maximum number of tuples to store in a single chunk. When a chunk exceeds this size, it is split into two chunks.
 	 */
-	public static final int MAX_CHUNK_SIZE = 64;
+	public static final int MAX_CHUNK_SIZE = 32;
 
 	/**
 	 * Inserts a tuple into the sorted duplicate-value chunks for the current key, rewriting the affected chunk when

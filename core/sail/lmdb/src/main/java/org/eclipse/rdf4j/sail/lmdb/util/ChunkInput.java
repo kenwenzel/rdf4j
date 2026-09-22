@@ -15,6 +15,11 @@ public final class ChunkInput {
     private boolean readKey = true;
     private long[] tuple;
     private boolean hasNext;
+    private int[] signs;
+    private int[] bufferPositions;
+    private final int valueElements;
+    private int valueTuplesIndex = -1;
+    private int valueTuplesCount;
 
     public ChunkInput(ByteBuffer keyBuffer, ByteBuffer valueBuffer, int elements, int splitPoint) {
         this.keyBuffer = keyBuffer;
@@ -22,6 +27,7 @@ public final class ChunkInput {
         this.elements = elements;
         this.splitPoint = splitPoint;
         this.tuple = new long[elements];
+        this.valueElements = elements - splitPoint;
     }
 
     public long[] current() {
@@ -50,20 +56,46 @@ public final class ChunkInput {
             if (!valueBuffer.hasRemaining()) {
                 return null;
             }
-            int valueElements = elements - splitPoint;
-            for (int i = 0; i < valueElements; i++) {
-                if (! valueBuffer.hasRemaining()) {
-                    throw new NoSuchElementException("No more elements in value buffer: expected " + valueElements + " elements, but only read " + i);
+            if (valueTuplesIndex == -1) {
+                this.signs = new int[valueElements];
+                this.bufferPositions = new int[valueElements];
+
+                int startPos = valueBuffer.position();
+                int footerLength = valueBuffer.get(startPos + valueBuffer.remaining() - 1) & 0xFF;
+                valueBuffer.position(startPos + valueBuffer.remaining() - 1 - footerLength);
+
+                bufferPositions[0] = 0;
+                for (int i = 1; i < valueElements; i++) {
+                    bufferPositions[i] = bufferPositions[i - 1] + (int) Varint.readUnsigned(valueBuffer);
                 }
-                long prevValue = tuple[splitPoint + i];
-                byte sign = valueBuffer.get();
+                Varint.skipUnsigned(valueBuffer); // skip last length
+                valueTuplesCount = (int) Varint.readUnsigned(valueBuffer);
+
+                valueBuffer.position(startPos);
+                valueTuplesIndex = 0;
+            }
+            if (valueTuplesIndex >= valueTuplesCount) {
+                return null;
+            }
+            for (int element = 0; element < valueElements; element++) {
+                valueBuffer.position(bufferPositions[element]);
+
+                int mod8 = valueTuplesIndex % 8;
+                if (mod8 == 0) {
+                    signs[element] = valueBuffer.get() & 0xFF;
+                }
+
+                long prevValue = tuple[splitPoint + element];
                 long delta = Varint.readUnsigned(valueBuffer);
-                if (sign == 1) {
+                if (((signs[element] >> mod8) & 1) == 1) {
                     delta = -delta;
                 }
                 value = prevValue + delta;
-                tuple[splitPoint + i] = value;
+                tuple[splitPoint + element] = value;
+
+                bufferPositions[element] = valueBuffer.position();
             }
+            valueTuplesIndex++;
         }
         return tuple;
     }
@@ -91,5 +123,6 @@ public final class ChunkInput {
         keyBuffer.rewind();
         valueBuffer.rewind();
         readKey = true;
+        valueTuplesIndex = -1;
     }
 }
