@@ -13,6 +13,7 @@ package org.eclipse.rdf4j.sail.lmdb;
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.E;
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.compareRegion;
 import static org.lwjgl.util.lmdb.LMDB.MDB_KEYEXIST;
+import static org.lwjgl.util.lmdb.LMDB.MDB_LAST;
 import static org.lwjgl.util.lmdb.LMDB.MDB_PREV;
 import static org.lwjgl.util.lmdb.LMDB.MDB_SET;
 import static org.lwjgl.util.lmdb.LMDB.MDB_SET_RANGE;
@@ -26,6 +27,7 @@ import java.nio.ByteBuffer;
 
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkInput;
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkOutput;
+import org.eclipse.rdf4j.sail.lmdb.util.MpmcRingBuffer;
 import org.lwjgl.util.lmdb.MDBVal;
 
 /**
@@ -36,6 +38,8 @@ public class Chunks {
 	 * Maximum number of tuples to store in a single chunk. When a chunk exceeds this size, it is split into two chunks.
 	 */
 	public static final int MAX_CHUNK_SIZE = 32;
+
+	static final MpmcRingBuffer<ChunkOutput> chunkPool = new MpmcRingBuffer<>(16);
 
 	/**
 	 * Inserts a tuple into the sorted duplicate-value chunks for the current key, rewriting the affected chunk when
@@ -78,9 +82,14 @@ public class Chunks {
 		rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET_RANGE));
 		if (rc == MDB_SUCCESS) {
 			E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_PREV));
+		} else {
+			rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_LAST));
+		}
+		if (rc == MDB_SUCCESS) {
 			existingKey = keyVal.mv_data();
 			if (compareRegion(keyScratch, 0, existingKey, 0, keyPrefixLength) == 0) {
-				if (compareRegion(keyScratch, 0, existingKey, 0, Math.min(keyScratch.remaining(), existingKey.remaining())) > 0) {
+				if (compareRegion(keyScratch, 0, existingKey, 0,
+						Math.min(keyScratch.remaining(), existingKey.remaining())) > 0) {
 					hasExistingChunk = true;
 				}
 			}
@@ -97,26 +106,26 @@ public class Chunks {
 		// We are positioned at the first duplicate value < newValueBuf.
 		// Find the correct insertion point for newValueBuf in the selected chunk, and check if it already exists.
 		var existing = new ChunkInput(existingKey, dataVal.mv_data(), 4, splitPoint);
-		var chunk1 = new ChunkOutput(MAX_CHUNK_SIZE, splitPoint);
-		int diff = existing.seek(tuple, chunk1);
+		var chunk1 = getChunk(4, splitPoint);
+		int diff = existing.seek(tuple, chunk1::addTuple);
 		if (diff == 0) {
+			chunkPool.offer(chunk1);
 			return MDB_KEYEXIST;
 		}
 
 		ChunkOutput chunk2 = null;
-		if (! chunk1.addTuple(tuple)) {
+		if (!chunk1.addTuple(tuple)) {
 			// The new tuple does not fit in the first chunk; we will need to create a second chunk.
-			chunk2 = new ChunkOutput(MAX_CHUNK_SIZE, splitPoint);
-		}
-		if (chunk2 != null) {
+			chunk2 = getChunk(4, splitPoint);
 			chunk2.addTuple(tuple);
 		}
+
 		long[] existingTuple;
 		while ((existingTuple = existing.next()) != null) {
 			if (chunk2 != null) {
 				chunk2.addTuple(existingTuple);
-			} else if (! chunk1.addTuple(existingTuple)) {
-				chunk2 = new ChunkOutput(MAX_CHUNK_SIZE, splitPoint);
+			} else if (!chunk1.addTuple(existingTuple)) {
+				chunk2 = getChunk(4, splitPoint);
 				chunk2.addTuple(existingTuple);
 			}
 		}
@@ -127,6 +136,7 @@ public class Chunks {
 		keyVal.mv_data(keyScratch.flip());
 		dataVal.mv_data(valueScratch.flip());
 		E(mdb_cursor_put(cursor, keyVal, dataVal, 0));
+		chunkPool.offer(chunk1);
 
 		if (chunk2 != null) {
 			keyScratch.clear();
@@ -135,21 +145,51 @@ public class Chunks {
 			keyVal.mv_data(keyScratch.flip());
 			dataVal.mv_data(valueScratch.flip());
 			E(mdb_cursor_put(cursor, keyVal, dataVal, 0));
+			chunkPool.offer(chunk2);
 		}
 
 		return MDB_SUCCESS;
 	}
 
+	static String chunkToString(ByteBuffer keyBuffer, ByteBuffer valueBuffer, int tupleLength, int splitPoint) {
+		var input = new ChunkInput(keyBuffer.duplicate(), valueBuffer.duplicate(), tupleLength, splitPoint);
+		StringBuilder sb = new StringBuilder();
+		sb.append("Chunk{");
+		long[] tuple;
+		while ((tuple = input.next()) != null) {
+			sb.append("[");
+			for (int i = 0; i < tupleLength; i++) {
+				if (i > 0) {
+					sb.append(", ");
+				}
+				sb.append(tuple[i]);
+			}
+			sb.append("]");
+		}
+		sb.append("}");
+		return sb.toString();
+	}
+
+	static ChunkOutput getChunk(int tupleLength, int splitPoint) {
+		ChunkOutput chunk = chunkPool.poll();
+		if (chunk == null) {
+			chunk = new ChunkOutput(MAX_CHUNK_SIZE, tupleLength, splitPoint);
+		} else {
+			chunk.reset(tupleLength, splitPoint);
+		}
+		return chunk;
+	}
+
 	/**
 	 * Removes a tuple from the sorted duplicate-value chunks for the current key.
 	 *
-	 * @param cursor        the LMDB cursor positioned on the duplicates for the key
-	 * @param splitPoint    the split point used in chunk encoding
-	 * @param keyVal        the key buffer used for cursor operations
-	 * @param dataVal       the data buffer used for cursor operations
-	 * @param tuple         the encoded tuple to remove
-	 * @param keyScratch    scratch buffer used to encode replacement chunks
-	 * @param valueScratch  scratch buffer used to encode replacement chunks
+	 * @param cursor       the LMDB cursor positioned on the duplicates for the key
+	 * @param splitPoint   the split point used in chunk encoding
+	 * @param keyVal       the key buffer used for cursor operations
+	 * @param dataVal      the data buffer used for cursor operations
+	 * @param tuple        the encoded tuple to remove
+	 * @param keyScratch   scratch buffer used to encode replacement chunks
+	 * @param valueScratch scratch buffer used to encode replacement chunks
 	 * @return {@code true} if the tuple was removed, otherwise {@code false}
 	 * @throws IOException if tuple decoding or encoding fails
 	 */
@@ -203,10 +243,11 @@ public class Chunks {
 		}
 
 		var existing = new ChunkInput(keyVal.mv_data(), dataVal.mv_data(), 4, splitPoint);
-		var chunk1 = new ChunkOutput(MAX_CHUNK_SIZE, splitPoint);
+		var chunk1 = getChunk(4, splitPoint);
 		if (!isAnchorKey) {
-			int diff = existing.seek(tuple, chunk1);
+			int diff = existing.seek(tuple, chunk1::addTuple);
 			if (diff != 0) {
+				chunkPool.offer(chunk1);
 				return false;
 			}
 		}
@@ -228,6 +269,7 @@ public class Chunks {
 		keyVal.mv_data(keyScratch.flip());
 		dataVal.mv_data(valueScratch.flip());
 		E(mdb_cursor_put(cursor, keyVal, dataVal, 0));
+		chunkPool.offer(chunk1);
 		return true;
 	}
 

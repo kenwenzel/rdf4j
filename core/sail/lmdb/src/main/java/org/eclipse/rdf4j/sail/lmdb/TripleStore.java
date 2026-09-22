@@ -76,6 +76,7 @@ import java.util.function.IntConsumer;
 
 import org.eclipse.collections.api.iterator.LongIterator;
 import org.eclipse.collections.impl.map.mutable.primitive.LongIntHashMap;
+import org.eclipse.collections.impl.utility.primitive.IntQuickSort;
 import org.eclipse.rdf4j.common.annotation.Experimental;
 import org.eclipse.rdf4j.common.concurrent.locks.StampedLongAdderLockManager;
 import org.eclipse.rdf4j.query.algebra.evaluation.sketch.SketchBasedJoinEstimator.Component;
@@ -132,7 +133,7 @@ class TripleStore implements Closeable {
 	 * The list of triple indexes that are used to store and retrieve triples.
 	 */
 	private final List<TripleIndex> indexes = new ArrayList<>();
-	private final int splitPosition = 1;
+	private final int splitPosition = 0;
 	private final ValueStore valueStore;
 
 	long env;
@@ -359,7 +360,7 @@ class TripleStore implements Closeable {
 					MDBVal keyValue = MDBVal.calloc(stack);
 					MDBVal dataValue = MDBVal.callocStack(stack);
 					ByteBuffer keyScratch = stack.malloc(4 * TripleIndex.MAX_KEY_LENGTH);
-					ByteBuffer valueScratch = stack.malloc(600);
+					ByteBuffer valueScratch = stack.malloc(4096);
 					PointerBuffer pCursor = stack.mallocPointer(1);
 					for (String fieldSeq : addedIndexSpecs) {
 						logger.debug("Initializing new index '{}'...", fieldSeq);
@@ -569,135 +570,65 @@ class TripleStore implements Closeable {
 	 */
 	protected void filterUsedIds(Collection<Long> ids) throws IOException {
 		/*
-		readTransaction(env, (stack, txn) -> {
-			MDBVal maxKey = MDBVal.malloc(stack);
-			ByteBuffer maxKeyBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-			MDBVal maxValue = MDBVal.malloc(stack);
-			ByteBuffer maxValueBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-			MDBVal keyData = MDBVal.malloc(stack);
-			ByteBuffer keyBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-
-			MDBVal valueData = MDBVal.mallocStack(stack);
-			ByteBuffer valueBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-
-			PointerBuffer pp = stack.mallocPointer(1);
-
-			// test contexts list if it contains the id
-			for (Iterator<Long> it = ids.iterator(); it.hasNext();) {
-				long id = it.next();
-				if (id < 0) {
-					it.remove();
-					continue;
-				}
-				keyBuf.clear();
-				Varint.writeUnsigned(keyBuf, id);
-				keyData.mv_data(keyBuf.flip());
-				if (mdb_get(txn, contextsDbi, keyData, valueData) == MDB_SUCCESS) {
-					it.remove();
-				}
-			}
-
-			// TODO currently this does not test for contexts (component == 3)
-			// because in most cases context indexes do not exist
-			for (int component = 0; component <= 2; component++) {
-				TripleIndex index = TripleIndex.getBestIndex(indexes, component == 0 ? 1 : -1, component == 1 ? 1 : -1,
-						component == 2 ? 1 : -1, component == 3 ? 1 : -1);
-
-				boolean fullScan = index.getPatternScore(component == 0 ? 1 : -1, component == 1 ? 1 : -1,
-						component == 2 ? 1 : -1, component == 3 ? 1 : -1) == 0;
-
-				for (boolean explicit : new boolean[] { true, false }) {
-					int dbi = index.getDB(explicit);
-
-					long cursor = 0;
-					try {
-						E(mdb_cursor_open(txn, dbi, pp));
-						cursor = pp.get(0);
-
-						if (fullScan) {
-							long[] quad = new long[4];
-							int rc = mdb_cursor_get(cursor, keyData, valueData, MDB_FIRST);
-							while (rc == MDB_SUCCESS && !ids.isEmpty()) {
-								index.entryToQuad(keyData.mv_data(), valueData.mv_data(), quad);
-								ids.remove(quad[0]);
-								ids.remove(quad[1]);
-								ids.remove(quad[2]);
-								ids.remove(quad[3]);
-
-								rc = mdb_cursor_get(cursor, keyData, valueData, MDB_NEXT);
-							}
-						} else {
-							for (Iterator<Long> it = ids.iterator(); it.hasNext();) {
-								long id = it.next();
-								if (id < 0) {
-									it.remove();
-									continue;
-								}
-								if (component != 2) {
-									// optimization: ensure that literals are only tested if they appear in object
-									// position
-									switch (ValueIds.getIdType(id)) {
-									case ValueIds.T_DOUBLE:
-									case ValueIds.T_LITERAL:
-										// id is a literal, don't test it
-										continue;
-									}
-								}
-
-								long subj = component == 0 ? id : -1, pred = component == 1 ? id : -1,
-										obj = component == 2 ? id : -1, context = component == 3 ? id : -1;
-
-								EntryMatcher matcher = index.createMatcher(subj, pred, obj, context);
-								int keyElements = index.getIndexSplitPosition();
-								int valueElements = 4 - keyElements;
-
-								maxKeyBuf.clear();
-								maxValueBuf.clear();
-								index.getMaxEntry(maxKeyBuf, maxValueBuf, subj, pred, obj, context);
-								maxKeyBuf.flip();
-								maxKey.mv_data(maxKeyBuf);
-								maxKeyBuf.flip();
-								maxValue.mv_data(maxValueBuf);
-
-								keyBuf.clear();
-								valueBuf.clear();
-								index.getMinEntry(keyBuf, valueBuf, subj, pred, obj, context);
-								keyBuf.flip();
-								valueBuf.flip();
-
-								// set cursor to min key
-								keyData.mv_data(keyBuf);
-								valueData.mv_data(valueBuf);
-								int rc = mdb_cursor_get(cursor, keyData, valueData, MDB_SET_RANGE);
-								boolean exists = false;
-								while (!exists && rc == MDB_SUCCESS) {
-									int keyDiff = mdb_cmp(txn, dbi, keyData, maxKey);
-									if (keyDiff > 0 || (keyDiff == 0 && mdb_dcmp(txn, dbi, valueData, maxValue) > 0)) {
-										// id was not found
-										break;
-									} else if (!matcher.matches(new VarintTupleIO(keyElements, keyData.mv_data()),
-											new VarintTupleIO(valueElements, valueData.mv_data()))) {
-										// value doesn't match search key/mask, fetch next value
-										rc = mdb_cursor_get(cursor, keyData, valueData, MDB_NEXT);
-									} else {
-										exists = true;
-									}
-								}
-
-								if (exists) {
-									it.remove();
-								}
-							}
-						}
-					} finally {
-						if (cursor != 0) {
-							mdb_cursor_close(cursor);
-						}
-					}
-				}
-			}
-			return null;
-		});*/
+		 * readTransaction(env, (stack, txn) -> { MDBVal maxKey = MDBVal.malloc(stack); ByteBuffer maxKeyBuf =
+		 * stack.malloc(TripleIndex.MAX_KEY_LENGTH); MDBVal maxValue = MDBVal.malloc(stack); ByteBuffer maxValueBuf =
+		 * stack.malloc(TripleIndex.MAX_KEY_LENGTH); MDBVal keyData = MDBVal.malloc(stack); ByteBuffer keyBuf =
+		 * stack.malloc(TripleIndex.MAX_KEY_LENGTH);
+		 *
+		 * MDBVal valueData = MDBVal.mallocStack(stack); ByteBuffer valueBuf = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
+		 *
+		 * PointerBuffer pp = stack.mallocPointer(1);
+		 *
+		 * // test contexts list if it contains the id for (Iterator<Long> it = ids.iterator(); it.hasNext();) { long id
+		 * = it.next(); if (id < 0) { it.remove(); continue; } keyBuf.clear(); Varint.writeUnsigned(keyBuf, id);
+		 * keyData.mv_data(keyBuf.flip()); if (mdb_get(txn, contextsDbi, keyData, valueData) == MDB_SUCCESS) {
+		 * it.remove(); } }
+		 *
+		 * // TODO currently this does not test for contexts (component == 3) // because in most cases context indexes
+		 * do not exist for (int component = 0; component <= 2; component++) { TripleIndex index =
+		 * TripleIndex.getBestIndex(indexes, component == 0 ? 1 : -1, component == 1 ? 1 : -1, component == 2 ? 1 : -1,
+		 * component == 3 ? 1 : -1);
+		 *
+		 * boolean fullScan = index.getPatternScore(component == 0 ? 1 : -1, component == 1 ? 1 : -1, component == 2 ? 1
+		 * : -1, component == 3 ? 1 : -1) == 0;
+		 *
+		 * for (boolean explicit : new boolean[] { true, false }) { int dbi = index.getDB(explicit);
+		 *
+		 * long cursor = 0; try { E(mdb_cursor_open(txn, dbi, pp)); cursor = pp.get(0);
+		 *
+		 * if (fullScan) { long[] quad = new long[4]; int rc = mdb_cursor_get(cursor, keyData, valueData, MDB_FIRST);
+		 * while (rc == MDB_SUCCESS && !ids.isEmpty()) { index.entryToQuad(keyData.mv_data(), valueData.mv_data(),
+		 * quad); ids.remove(quad[0]); ids.remove(quad[1]); ids.remove(quad[2]); ids.remove(quad[3]);
+		 *
+		 * rc = mdb_cursor_get(cursor, keyData, valueData, MDB_NEXT); } } else { for (Iterator<Long> it =
+		 * ids.iterator(); it.hasNext();) { long id = it.next(); if (id < 0) { it.remove(); continue; } if (component !=
+		 * 2) { // optimization: ensure that literals are only tested if they appear in object // position switch
+		 * (ValueIds.getIdType(id)) { case ValueIds.T_DOUBLE: case ValueIds.T_LITERAL: // id is a literal, don't test it
+		 * continue; } }
+		 *
+		 * long subj = component == 0 ? id : -1, pred = component == 1 ? id : -1, obj = component == 2 ? id : -1,
+		 * context = component == 3 ? id : -1;
+		 *
+		 * EntryMatcher matcher = index.createMatcher(subj, pred, obj, context); int keyElements =
+		 * index.getIndexSplitPosition(); int valueElements = 4 - keyElements;
+		 *
+		 * maxKeyBuf.clear(); maxValueBuf.clear(); index.getMaxEntry(maxKeyBuf, maxValueBuf, subj, pred, obj, context);
+		 * maxKeyBuf.flip(); maxKey.mv_data(maxKeyBuf); maxKeyBuf.flip(); maxValue.mv_data(maxValueBuf);
+		 *
+		 * keyBuf.clear(); valueBuf.clear(); index.getMinEntry(keyBuf, valueBuf, subj, pred, obj, context);
+		 * keyBuf.flip(); valueBuf.flip();
+		 *
+		 * // set cursor to min key keyData.mv_data(keyBuf); valueData.mv_data(valueBuf); int rc =
+		 * mdb_cursor_get(cursor, keyData, valueData, MDB_SET_RANGE); boolean exists = false; while (!exists && rc ==
+		 * MDB_SUCCESS) { int keyDiff = mdb_cmp(txn, dbi, keyData, maxKey); if (keyDiff > 0 || (keyDiff == 0 &&
+		 * mdb_dcmp(txn, dbi, valueData, maxValue) > 0)) { // id was not found break; } else if (!matcher.matches(new
+		 * VarintTupleIO(keyElements, keyData.mv_data()), new VarintTupleIO(valueElements, valueData.mv_data()))) { //
+		 * value doesn't match search key/mask, fetch next value rc = mdb_cursor_get(cursor, keyData, valueData,
+		 * MDB_NEXT); } else { exists = true; } }
+		 *
+		 * if (exists) { it.remove(); } } } } finally { if (cursor != 0) { mdb_cursor_close(cursor); } } } } return
+		 * null; });
+		 */
 	}
 
 	/**
@@ -717,91 +648,56 @@ class TripleStore implements Closeable {
 
 		return 1;
 		/*
-		LmdbPageCardinalityEstimator estimator = pageEstimator;
-		if (estimator == null) {
-			return cardinalityUsingRdf4j532Estimator(subj, pred, obj, context);
-		}
-
-		int bindingMask = LmdbPageCardinalityEstimator.bindingMask(subj, pred, obj, context);
-		int primaryIndexPosition = estimator.primaryIndex(bindingMask);
-		TripleIndex primaryIndex = indexes.get(primaryIndexPosition);
-		try {
-			CardinalityEstimate primary = cardinalityUsingPageEstimator(primaryIndexPosition, subj, pred, obj, context,
-					bindingMask);
-			if (!primary.secondaryEvidenceRecommended()) {
-				return primary.entries();
-			}
-
-			int secondaryIndexPosition = estimator.secondaryIndex(bindingMask);
-			if (secondaryIndexPosition < 0) {
-				return primary.entries();
-			}
-			TripleIndex secondaryIndex = indexes.get(secondaryIndexPosition);
-			try {
-				CardinalityEstimate secondary = cardinalityUsingPageEstimator(secondaryIndexPosition, subj, pred, obj,
-						context, bindingMask);
-				return LmdbPageCardinalityEstimator.combineIndexEstimates(primary, secondary).entries();
-			} catch (IOException | RuntimeException secondaryFailure) {
-				logger.debug("Secondary page cardinality estimate failed for index {}; using primary index {}",
-						new String(secondaryIndex.getFieldSeq()), new String(primaryIndex.getFieldSeq()),
-						secondaryFailure);
-				return primary.entries();
-			}
-		} catch (IOException | RuntimeException e) {
-			logger.warn("Page cardinality estimator failed for index {}, falling back to the RDF4J 5.3.2 sampler",
-					new String(primaryIndex.getFieldSeq()), e);
-			return cardinalityUsingRdf4j532Estimator(subj, pred, obj, context);
-		}
-
+		 * LmdbPageCardinalityEstimator estimator = pageEstimator; if (estimator == null) { return
+		 * cardinalityUsingRdf4j532Estimator(subj, pred, obj, context); }
+		 *
+		 * int bindingMask = LmdbPageCardinalityEstimator.bindingMask(subj, pred, obj, context); int
+		 * primaryIndexPosition = estimator.primaryIndex(bindingMask); TripleIndex primaryIndex =
+		 * indexes.get(primaryIndexPosition); try { CardinalityEstimate primary =
+		 * cardinalityUsingPageEstimator(primaryIndexPosition, subj, pred, obj, context, bindingMask); if
+		 * (!primary.secondaryEvidenceRecommended()) { return primary.entries(); }
+		 *
+		 * int secondaryIndexPosition = estimator.secondaryIndex(bindingMask); if (secondaryIndexPosition < 0) { return
+		 * primary.entries(); } TripleIndex secondaryIndex = indexes.get(secondaryIndexPosition); try {
+		 * CardinalityEstimate secondary = cardinalityUsingPageEstimator(secondaryIndexPosition, subj, pred, obj,
+		 * context, bindingMask); return LmdbPageCardinalityEstimator.combineIndexEstimates(primary,
+		 * secondary).entries(); } catch (IOException | RuntimeException secondaryFailure) {
+		 * logger.debug("Secondary page cardinality estimate failed for index {}; using primary index {}", new
+		 * String(secondaryIndex.getFieldSeq()), new String(primaryIndex.getFieldSeq()), secondaryFailure); return
+		 * primary.entries(); } } catch (IOException | RuntimeException e) {
+		 * logger.warn("Page cardinality estimator failed for index {}, falling back to the RDF4J 5.3.2 sampler", new
+		 * String(primaryIndex.getFieldSeq()), e); return cardinalityUsingRdf4j532Estimator(subj, pred, obj, context); }
+		 *
 		 */
 	}
 
-	/*private CardinalityEstimate cardinalityUsingPageEstimator(int indexPosition, long subj, long pred, long obj,
-			long context, int bindingMask) throws IOException {
-		LmdbPageCardinalityEstimator estimator = pageEstimator;
-		if (estimator == null) {
-			return CardinalityEstimate
-					.unqualified(cardinalityUsingRdf4j532Estimator(subj, pred, obj, context));
-		}
-		TripleIndex index = indexes.get(indexPosition);
-		IndexShape indexShape = estimator.indexShape(indexPosition, bindingMask);
-		final String explicitDbName = index.getName(true);
-		final String inferredDbName = index.getName(false);
-
-		// Query optimization already holds the dataset's read transaction.
-		return txnManager.doWithPriority((stack, txn) -> {
-			long txnId = mdb_txn_id(txn);
-			if (bindingMask == 0) {
-				double exact = (double) estimator.totalEntries(txnId, explicitDbName)
-						+ estimator.totalEntries(txnId, inferredDbName);
-				return CardinalityEstimate.exact(exact);
-			}
-
-			ByteBuffer minKeyBuffer = ByteBuffer.allocate(TripleIndex.MAX_KEY_LENGTH);
-			ByteBuffer minValueBuffer = ByteBuffer.allocate(TripleIndex.MAX_KEY_LENGTH);
-			index.getMinEntry(minKeyBuffer, minValueBuffer, subj, pred, obj, context);
-			minKeyBuffer.flip();
-			minValueBuffer.flip();
-			byte[] minKey = toArray(minKeyBuffer);
-
-			ByteBuffer maxKeyBuffer = ByteBuffer.allocate(TripleIndex.MAX_KEY_LENGTH);
-			ByteBuffer maxValueBuffer = ByteBuffer.allocate(TripleIndex.MAX_KEY_LENGTH);
-			index.getMaxEntry(maxKeyBuffer, maxValueBuffer, subj, pred, obj, context);
-			maxKeyBuffer.flip();
-			maxValueBuffer.flip();
-			byte[] maxKey = toArray(maxKeyBuffer);
-
-			EntryMatcher matcher = indexShape.residualFieldCount() == 0 ? null
-					: index.createMatcher(subj, pred, obj, context);
-			LmdbPageCardinalityEstimator.Estimate explicit = estimator.estimateEntriesWithQuality(txnId,
-					explicitDbName, minKey, minKey.length, maxKey, maxKey.length, matcher,
-					indexShape.residualFieldCount());
-			LmdbPageCardinalityEstimator.Estimate inferred = estimator.estimateEntriesWithQuality(txnId,
-					inferredDbName, minKey, minKey.length, maxKey, maxKey.length, matcher,
-					indexShape.residualFieldCount());
-			return LmdbPageCardinalityEstimator.combineDatabaseEstimates(explicit, inferred);
-		});
-	}*/
+	/*
+	 * private CardinalityEstimate cardinalityUsingPageEstimator(int indexPosition, long subj, long pred, long obj, long
+	 * context, int bindingMask) throws IOException { LmdbPageCardinalityEstimator estimator = pageEstimator; if
+	 * (estimator == null) { return CardinalityEstimate .unqualified(cardinalityUsingRdf4j532Estimator(subj, pred, obj,
+	 * context)); } TripleIndex index = indexes.get(indexPosition); IndexShape indexShape =
+	 * estimator.indexShape(indexPosition, bindingMask); final String explicitDbName = index.getName(true); final String
+	 * inferredDbName = index.getName(false);
+	 *
+	 * // Query optimization already holds the dataset's read transaction. return txnManager.doWithPriority((stack, txn)
+	 * -> { long txnId = mdb_txn_id(txn); if (bindingMask == 0) { double exact = (double) estimator.totalEntries(txnId,
+	 * explicitDbName) + estimator.totalEntries(txnId, inferredDbName); return CardinalityEstimate.exact(exact); }
+	 *
+	 * ByteBuffer minKeyBuffer = ByteBuffer.allocate(TripleIndex.MAX_KEY_LENGTH); ByteBuffer minValueBuffer =
+	 * ByteBuffer.allocate(TripleIndex.MAX_KEY_LENGTH); index.getMinEntry(minKeyBuffer, minValueBuffer, subj, pred, obj,
+	 * context); minKeyBuffer.flip(); minValueBuffer.flip(); byte[] minKey = toArray(minKeyBuffer);
+	 *
+	 * ByteBuffer maxKeyBuffer = ByteBuffer.allocate(TripleIndex.MAX_KEY_LENGTH); ByteBuffer maxValueBuffer =
+	 * ByteBuffer.allocate(TripleIndex.MAX_KEY_LENGTH); index.getMaxEntry(maxKeyBuffer, maxValueBuffer, subj, pred, obj,
+	 * context); maxKeyBuffer.flip(); maxValueBuffer.flip(); byte[] maxKey = toArray(maxKeyBuffer);
+	 *
+	 * EntryMatcher matcher = indexShape.residualFieldCount() == 0 ? null : index.createMatcher(subj, pred, obj,
+	 * context); LmdbPageCardinalityEstimator.Estimate explicit = estimator.estimateEntriesWithQuality(txnId,
+	 * explicitDbName, minKey, minKey.length, maxKey, maxKey.length, matcher, indexShape.residualFieldCount());
+	 * LmdbPageCardinalityEstimator.Estimate inferred = estimator.estimateEntriesWithQuality(txnId, inferredDbName,
+	 * minKey, minKey.length, maxKey, maxKey.length, matcher, indexShape.residualFieldCount()); return
+	 * LmdbPageCardinalityEstimator.combineDatabaseEstimates(explicit, inferred); }); }
+	 */
 
 	private static byte[] toArray(ByteBuffer buffer) {
 		byte[] data = new byte[buffer.remaining()];
@@ -881,9 +777,9 @@ class TripleStore implements Closeable {
 
 				keyBuf.clear();
 				index.getMinEntry(minTuple, subj, pred, obj, context);
-                for (long l : minTuple) {
-                    Varint.writeUnsigned(keyBuf, l);
-                }
+				for (long l : minTuple) {
+					Varint.writeUnsigned(keyBuf, l);
+				}
 				keyBuf.flip();
 
 				int dbi = index.getDB(explicit);
@@ -1092,7 +988,8 @@ class TripleStore implements Closeable {
 	static long lastLogTime = System.currentTimeMillis();
 	int localCount = 0;
 
-	boolean statementExists(long[] tuple, int splitPoint, long cursor, MDBVal keyVal, MDBVal dataVal, ByteBuffer keyScratch)
+	boolean statementExists(long[] tuple, int splitPoint, long cursor, MDBVal keyVal, MDBVal dataVal,
+			ByteBuffer keyScratch)
 			throws IOException {
 		keyScratch.clear();
 		int keyPrefixLength;
@@ -1149,7 +1046,8 @@ class TripleStore implements Closeable {
 				long cursorExplicit = pCursor.get(0);
 				boolean mainExplicitExists;
 				try {
-					mainExplicitExists = statementExists(tuple,mainIndex.getIndexSplitPosition(), cursorExplicit, keyVal,
+					mainExplicitExists = statementExists(tuple, mainIndex.getIndexSplitPosition(), cursorExplicit,
+							keyVal,
 							dataVal, keyScratch);
 				} finally {
 					mdb_cursor_close(cursorExplicit);
@@ -1158,7 +1056,8 @@ class TripleStore implements Closeable {
 				long cursorInferred = pCursor.get(0);
 				boolean mainInferredExists;
 				try {
-					mainInferredExists = statementExists(tuple, mainIndex.getIndexSplitPosition(), cursorInferred, keyVal,
+					mainInferredExists = statementExists(tuple, mainIndex.getIndexSplitPosition(), cursorInferred,
+							keyVal,
 							dataVal, keyScratch);
 				} finally {
 					mdb_cursor_close(cursorInferred);
@@ -1256,7 +1155,7 @@ class TripleStore implements Closeable {
 		if (count == 0) {
 			return;
 		}
-		if (true || count == 1 || count < subj.length || recordCache != null || requiresResize()) {
+		if (count == 1 || count < subj.length || recordCache != null || requiresResize()) {
 			storeTriplesIndividually(subj, pred, obj, context, 0, count, explicit, addedIndexConsumer);
 			return;
 		}
@@ -1270,7 +1169,7 @@ class TripleStore implements Closeable {
 			MDBVal dataVal = MDBVal.calloc(stack);
 			long[] tuple = new long[4];
 			ByteBuffer keyScratch = stack.malloc(4 * TripleIndex.MAX_KEY_LENGTH);
-			ByteBuffer valueScratch = stack.malloc(600);
+			ByteBuffer valueScratch = stack.malloc(4096);
 			PointerBuffer mainCursorHandle = stack.mallocPointer(1);
 			long mainCursor = 0;
 			PointerBuffer inferredDeleteCursorHandle = stack.mallocPointer(1);
@@ -1278,7 +1177,6 @@ class TripleStore implements Closeable {
 			int[] sortedIndices = new int[count];
 			boolean[] promotedFromImplicit = new boolean[count];
 			LongIntHashMap contextIncrements = new LongIntHashMap();
-			ChunkUpdater updater = null; //new ChunkUpdater(stack);
 			for (int i = 0; i < count; i++) {
 				if (shouldFallBackFromAlignedWrite()) {
 					remainingStart = i;
@@ -1290,7 +1188,9 @@ class TripleStore implements Closeable {
 					mainCursor = mainCursorHandle.get(0);
 				}
 				int rc = MDB_SUCCESS;
-				// updater.add(mainCursor, 4 - mainIndex.getIndexSplitPosition(), keyVal, dataVal, keyBuf, valueBuf);
+				Chunks.mergeChunk(mainCursor, mainIndex.getIndexSplitPosition(), keyVal, dataVal, tuple,
+						keyScratch, valueScratch);
+				// updater.add(mainCursor, keyVal, dataVal, tuple);
 				if (rc == MDB_MAP_FULL && autoGrow) {
 					remainingStart = i;
 					break;
@@ -1316,7 +1216,7 @@ class TripleStore implements Closeable {
 					contextIncrements.addToValue(context[i], 1);
 				}
 			}
-			// updater.flush(mainCursor, 4 - mainIndex.getIndexSplitPosition(), keyVal, dataVal);
+			// updater.flush(mainCursor, keyVal, dataVal);
 
 			int[] mainOrderIndices = Arrays.copyOf(sortedIndices, addedCount);
 			LongIntHashMap appliedContextIncrements = new LongIntHashMap();
@@ -1339,15 +1239,18 @@ class TripleStore implements Closeable {
 			}
 
 			char[] currentFieldSeq = mainIndex.getFieldSeq();
-			// updater.setSortedInsertion(true);
+			ChunkUpdater updater = new ChunkUpdater(stack);
+			updater.setSortedInsertion(true);
 			for (int i = 1; i < indexes.size(); i++) {
 				TripleIndex index = indexes.get(i);
-				// updater.reset();
+				updater.reset(4, index.getIndexSplitPosition());
 				if (TripleIndex.shouldResetToMainIndexOrder(mainIndex.getFieldSeq(), currentFieldSeq,
 						index.getFieldSeq())) {
 					System.arraycopy(mainOrderIndices, 0, sortedIndices, 0, addedCount);
 				}
-				sortStatementIndicesByLeadingField(sortedIndices, addedCount, index, subj, pred, obj, context);
+				IntQuickSort.sort(sortedIndices, 0, addedCount - 1,
+						(a, b) -> index.compare(subj, pred, obj, context, a, b));
+				// sortStatementIndicesByLeadingField(sortedIndices, addedCount, index, subj, pred, obj, context);
 				currentFieldSeq = index.getFieldSeq();
 				long secondaryWriteCursor = addedCount > 0 ? getAlignedWriteCursor(i, index, explicit, cursorHandle)
 						: 0;
@@ -1366,7 +1269,7 @@ class TripleStore implements Closeable {
 								dataVal, tuple, keyScratch, valueScratch);
 					}
 					if (shouldFallBackFromAlignedWrite()) {
-						// updater.flush(secondaryWriteCursor, 4 - index.getIndexSplitPosition(), keyVal, dataVal);
+						updater.flush(secondaryWriteCursor, keyVal, dataVal);
 						fallBackFromAlignedWrite(mainOrderIndices, addedCount, subj, pred, obj, context,
 								promotedFromImplicit, remainingStart, count, explicit, contextIncrements,
 								addedIndexConsumer);
@@ -1376,7 +1279,7 @@ class TripleStore implements Closeable {
 					// pred[statementIndex] + ", " + obj[statementIndex] + ", " + context[statementIndex]);
 					int rc = MDB_SUCCESS;
 
-						// updater.add(secondaryWriteCursor, 4 - index.getIndexSplitPosition(), keyVal, dataVal, keyBuf, valueBuf);
+					updater.add(secondaryWriteCursor, keyVal, dataVal, tuple);
 					if (rc == MDB_MAP_FULL && autoGrow) {
 						fallBackFromAlignedWrite(mainOrderIndices, addedCount, subj, pred, obj, context,
 								promotedFromImplicit, remainingStart, count, explicit, contextIncrements,
@@ -1385,7 +1288,7 @@ class TripleStore implements Closeable {
 					}
 					E(rc);
 				}
-				// updater.flush(secondaryWriteCursor, 4 - index.getIndexSplitPosition(), keyVal, dataVal);
+				updater.flush(secondaryWriteCursor, keyVal, dataVal);
 
 				if (secondaryDeleteCursor != 0) {
 					mdb_cursor_close(secondaryDeleteCursor);
@@ -1463,8 +1366,7 @@ class TripleStore implements Closeable {
 		int[] scratchIndices = ensureLeadingFieldScratchIndices(length);
 		long[] scratchValues = ensureLeadingFieldScratchValues(length);
 		LeadingFieldSorters.lsdRadixSort(statementIndices, leadingValues, length, scratchIndices, scratchValues,
-				leadingFieldRadixCounts,
-				leadingFieldRadixOffsets);
+				leadingFieldRadixCounts, leadingFieldRadixOffsets);
 	}
 
 	private int[] ensureLeadingFieldScratchIndices(int length) {
@@ -1650,7 +1552,7 @@ class TripleStore implements Closeable {
 			MDBVal keyValue = MDBVal.callocStack(stack);
 			MDBVal dataValue = MDBVal.callocStack(stack);
 			ByteBuffer keyScratch = stack.malloc(4 * TripleIndex.MAX_KEY_LENGTH);
-			ByteBuffer valueScratch = stack.malloc(600);
+			ByteBuffer valueScratch = stack.malloc(4096);
 			long[] tuple = new long[4];
 			PointerBuffer pCursor = stack.mallocPointer(1);
 
@@ -1679,7 +1581,8 @@ class TripleStore implements Closeable {
 					E(mdb_cursor_open(writeTxn, index.getDB(explicit), pCursor));
 					long cursor = pCursor.get(0);
 					try {
-						Chunks.deleteFromChunk(cursor, index.getIndexSplitPosition(), keyValue, dataValue, tuple, keyScratch, valueScratch);
+						Chunks.deleteFromChunk(cursor, index.getIndexSplitPosition(), keyValue, dataValue, tuple,
+								keyScratch, valueScratch);
 					} finally {
 						mdb_cursor_close(cursor);
 					}
@@ -1702,7 +1605,7 @@ class TripleStore implements Closeable {
 				// use calloc to get an empty data value
 				MDBVal dataVal = MDBVal.callocStack(stack);
 				ByteBuffer keyScratch = stack.malloc(4 * TripleIndex.MAX_KEY_LENGTH);
-				ByteBuffer valueScratch = stack.malloc(600);
+				ByteBuffer valueScratch = stack.malloc(4096);
 				long[] tuple = new long[4];
 				long[] indexCursors = new long[indexes.size()];
 
@@ -1736,9 +1639,11 @@ class TripleStore implements Closeable {
 						}
 
 						if (r.add) {
-							E(Chunks.mergeChunk(cursor, index.getIndexSplitPosition(), keyVal, dataVal, tuple, keyScratch, valueScratch));
+							E(Chunks.mergeChunk(cursor, index.getIndexSplitPosition(), keyVal, dataVal, tuple,
+									keyScratch, valueScratch));
 						} else {
-							E(Chunks.deleteFromChunk(cursor, index.getIndexSplitPosition(), keyVal, dataVal, tuple, keyScratch, valueScratch) ? MDB_SUCCESS : MDB_NOTFOUND);
+							E(Chunks.deleteFromChunk(cursor, index.getIndexSplitPosition(), keyVal, dataVal, tuple,
+									keyScratch, valueScratch) ? MDB_SUCCESS : MDB_NOTFOUND);
 						}
 						i++;
 					}

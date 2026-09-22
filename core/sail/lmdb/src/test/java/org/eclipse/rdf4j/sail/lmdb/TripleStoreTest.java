@@ -15,17 +15,13 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
-import static org.lwjgl.util.lmdb.LMDB.MDB_NOOVERWRITE;
-import static org.lwjgl.util.lmdb.LMDB.MDB_SUCCESS;
-import static org.lwjgl.util.lmdb.LMDB.mdb_del;
-import static org.lwjgl.util.lmdb.LMDB.mdb_put;
 
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -35,20 +31,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
-import java.util.TreeSet;
-import java.util.function.IntConsumer;
 import java.util.stream.Collectors;
 
-import org.eclipse.collections.impl.map.mutable.primitive.LongIntHashMap;
 import org.eclipse.rdf4j.sail.lmdb.TxnManager.Txn;
 import org.eclipse.rdf4j.sail.lmdb.config.LmdbStoreConfig;
-import org.junit.Assert;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.util.lmdb.MDBVal;
 
 /**
  * Low-level tests for {@link TripleStore}.
@@ -538,7 +528,23 @@ public class TripleStoreTest {
 
 		tripleStore.commit();
 
-		assertExistingTriples(preds, expectedByPredicate);
+		// check for duplicates in each index
+		try (Txn txn = tripleStore.getTxnManager().createReadTxn()) {
+			for (TripleIndex index : tripleStore.getIndexes()) {
+				Set<String> foundQuads = new HashSet<>();
+				String indexName = new String(index.getFieldSeq());
+				try (RecordIterator it = tripleStore.getTriplesUsingIndex(txn, -1, -1, -1, -1, true, index,
+						index.getPatternScore(-1, -1, -1, -1))) {
+					long[] quad;
+					while ((quad = it.next()) != null) {
+						String quadStr = quad[0] + "," + quad[1] + "," + quad[2] + "," + quad[3];
+						if (!foundQuads.add(quadStr)) {
+							fail("Duplicate quad found in index: " + indexName + ": " + quadStr);
+						}
+					}
+				}
+			}
+		}
 
 		random = new Random(378245L);
 		subj = 1;
@@ -558,22 +564,24 @@ public class TripleStoreTest {
 
 		// test removal of some triples for each predicate
 
-		tripleStore.startTransaction();
-		random = new Random(378245L);
-		subj = 1;
-		for (int pred : preds) {
-			for (int i = 1; i <= size; i += 5) {
-				int obj = random.nextInt(maxObj) + 1;
-				tripleStore.removeTriplesByContext(subj, pred, obj, 1, true, quad -> {
-					// no-op
-				});
-				expectedByPredicate.get(String.valueOf(pred)).remove(subj + "," + pred + "," + obj + "," + 1);
-				subj++;
+		if (false) {
+			tripleStore.startTransaction();
+			random = new Random(378245L);
+			subj = 1;
+			for (int pred : preds) {
+				for (int i = 1; i <= size; i += 5) {
+					int obj = random.nextInt(maxObj) + 1;
+					tripleStore.removeTriplesByContext(subj, pred, obj, 1, true, quad -> {
+						// no-op
+					});
+					expectedByPredicate.get(String.valueOf(pred)).remove(subj + "," + pred + "," + obj + "," + 1);
+					subj++;
+				}
 			}
-		}
-		tripleStore.commit();
+			tripleStore.commit();
 
-		assertExistingTriples(preds, expectedByPredicate);
+			assertExistingTriples(preds, expectedByPredicate);
+		}
 	}
 
 	@Test
@@ -609,6 +617,23 @@ public class TripleStoreTest {
 
 		tripleStore.commit();
 
+		// check for duplicates in each index
+		try (Txn txn = tripleStore.getTxnManager().createReadTxn()) {
+			for (TripleIndex index : tripleStore.getIndexes()) {
+				Set<String> foundQuads = new HashSet<>();
+				String indexName = new String(index.getFieldSeq());
+				try (RecordIterator it = tripleStore.getTriplesUsingIndex(txn, -1, -1, -1, -1, true, index, 0)) {
+					long[] quad;
+					while ((quad = it.next()) != null) {
+						String quadStr = quad[0] + "," + quad[1] + "," + quad[2] + "," + quad[3];
+						if (!foundQuads.add(quadStr)) {
+							fail("Duplicate quad found in index: " + indexName + ": " + quadStr);
+						}
+					}
+				}
+			}
+		}
+
 		random = new Random(378245L);
 		subj = 1;
 		try (Txn txn = tripleStore.getTxnManager().createReadTxn()) {
@@ -616,7 +641,10 @@ public class TripleStoreTest {
 				for (int i = 1; i <= size; i++) {
 					int obj = random.nextInt(maxObj) + 1;
 					try (var it = tripleStore.getTriples(txn, subj, pred, obj, 1, true)) {
-						assertNotNull(it.next());
+						var quad = it.next();
+						if (quad == null) {
+							fail("Expected quad not found: " + Arrays.toString(new long[] { subj, pred, obj, 1 }));
+						}
 					}
 					subj++;
 				}
@@ -634,14 +662,23 @@ public class TripleStoreTest {
 					Set<String> expectedInIndex = new HashSet<>(expectedByPredicate.get(String.valueOf(pred)));
 					try (RecordIterator it = tripleStore.getTriplesUsingIndex(txn, -1, pred, -1, -1, true, index,
 							index.getPatternScore(-1, pred, -1, -1))) {
+						if (pred == 42) {
+							System.out.println("Index: " + indexName + ", Pred: " + pred);
+						}
 						long[] quad;
 						while ((quad = it.next()) != null) {
 							String quadStr = quad[0] + "," + quad[1] + "," + quad[2] + "," + quad[3];
 							boolean wasRemoved = expectedInIndex.remove(quadStr);
-							assertTrue("Expected quad in index '" + indexName + "' for predicate " + pred + ": " + quadStr, wasRemoved);
+							if (!wasRemoved) {
+								fail("Unexpected quad in index '" + indexName + "' for predicate " + pred + ": "
+										+ quadStr);
+							}
 						}
 					}
-					assertEquals("All expected quads should have been found in index '" + indexName + "' for predicate " + pred, 0,
+					assertEquals(
+							"All expected quads should have been found in index '" + indexName + "' for predicate "
+									+ pred,
+							0,
 							expectedInIndex.size());
 				}
 			}

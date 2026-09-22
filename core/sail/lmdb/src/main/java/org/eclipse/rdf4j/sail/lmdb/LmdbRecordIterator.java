@@ -13,17 +13,9 @@ package org.eclipse.rdf4j.sail.lmdb;
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.E;
 import static org.lwjgl.util.lmdb.LMDB.MDB_CURRENT;
 import static org.lwjgl.util.lmdb.LMDB.MDB_FIRST;
-import static org.lwjgl.util.lmdb.LMDB.MDB_FIRST_DUP;
-import static org.lwjgl.util.lmdb.LMDB.MDB_GET_BOTH_RANGE;
-import static org.lwjgl.util.lmdb.LMDB.MDB_GET_CURRENT;
-import static org.lwjgl.util.lmdb.LMDB.MDB_LAST_DUP;
+import static org.lwjgl.util.lmdb.LMDB.MDB_LAST;
 import static org.lwjgl.util.lmdb.LMDB.MDB_NEXT;
-import static org.lwjgl.util.lmdb.LMDB.MDB_NEXT_DUP;
-import static org.lwjgl.util.lmdb.LMDB.MDB_NEXT_NODUP;
-import static org.lwjgl.util.lmdb.LMDB.MDB_NOTFOUND;
 import static org.lwjgl.util.lmdb.LMDB.MDB_PREV;
-import static org.lwjgl.util.lmdb.LMDB.MDB_PREV_DUP;
-import static org.lwjgl.util.lmdb.LMDB.MDB_SET;
 import static org.lwjgl.util.lmdb.LMDB.MDB_SET_KEY;
 import static org.lwjgl.util.lmdb.LMDB.MDB_SET_RANGE;
 import static org.lwjgl.util.lmdb.LMDB.MDB_SUCCESS;
@@ -36,7 +28,6 @@ import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_renew;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 
 import org.eclipse.rdf4j.common.concurrent.locks.StampedLongAdderLockManager;
 import org.eclipse.rdf4j.sail.SailException;
@@ -44,8 +35,6 @@ import org.eclipse.rdf4j.sail.lmdb.TxnManager.Txn;
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkInput;
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkOutput;
 import org.eclipse.rdf4j.sail.lmdb.util.EntryMatcher;
-import org.eclipse.rdf4j.sail.lmdb.util.VarintTupleIO;
-import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.util.lmdb.MDBVal;
 import org.slf4j.Logger;
@@ -80,7 +69,7 @@ class LmdbRecordIterator implements RecordIterator {
 
 		private final MDBVal valueData = MDBVal.malloc();
 
-		private ChunkInput chunkInput;
+		private final ChunkInput chunkInput = new ChunkInput();
 
 		private final ByteBuffer minKeyBuf = MemoryUtil.memAlloc((Long.BYTES + 1) * 4);
 
@@ -90,9 +79,9 @@ class LmdbRecordIterator implements RecordIterator {
 
 		private final long[] maxTuple = new long[4];
 
-		private long[] quad = new long[4];
-		private long[] patternQuad = new long[4];
-		private long[] patternTuple = new long[4];
+		private final long[] quad = new long[4];
+		private final long[] patternQuad = new long[4];
+		private final long[] patternTuple = new long[4];
 
 		private StampedLongAdderLockManager txnLockManager;
 
@@ -232,15 +221,12 @@ class LmdbRecordIterator implements RecordIterator {
 			if (fetchNext) {
 				if (chunkOutput != null) {
 					if (remove) {
-						current = state.chunkInput.next();
 						remove = false;
 					} else {
 						chunkOutput.addTuple(current);
 					}
-				} else {
-					current = state.chunkInput.next();
 				}
-				if (current == null && (current = state.chunkInput.next()) == null) {
+				if ((current = state.chunkInput.next()) == null) {
 					try {
 						flush();
 					} catch (IOException e) {
@@ -249,7 +235,7 @@ class LmdbRecordIterator implements RecordIterator {
 					// no more values in chunk, move to next key
 					lastResult = mdb_cursor_get(state.cursor, state.keyData, state.valueData, MDB_NEXT);
 					if (lastResult == MDB_SUCCESS) {
-						state.chunkInput = new ChunkInput(state.keyData.mv_data(), state.valueData.mv_data(),
+						state.chunkInput.reset(state.keyData.mv_data(), state.valueData.mv_data(),
 								4, index.getIndexSplitPosition());
 					}
 					isChunkValue = false;
@@ -265,14 +251,19 @@ class LmdbRecordIterator implements RecordIterator {
 					lastResult = E(mdb_cursor_get(state.cursor, state.keyData, state.valueData, MDB_SET_KEY));
 					if (lastResult != MDB_SUCCESS) {
 						lastResult = E(mdb_cursor_get(state.cursor, state.keyData, state.valueData, MDB_SET_RANGE));
-						E(mdb_cursor_get(state.cursor, state.keyData, state.valueData, MDB_PREV));
+						if (lastResult == MDB_SUCCESS) {
+							E(mdb_cursor_get(state.cursor, state.keyData, state.valueData, MDB_PREV));
+						} else {
+							lastResult = E(mdb_cursor_get(state.cursor, state.keyData, state.valueData, MDB_LAST));
+						}
+
 					}
 				} else {
 					// set cursor to first item
 					lastResult = E(mdb_cursor_get(state.cursor, state.keyData, state.valueData, MDB_FIRST));
 				}
 				if (lastResult == MDB_SUCCESS) {
-					state.chunkInput = new ChunkInput(state.keyData.mv_data(), state.valueData.mv_data(),
+					state.chunkInput.reset(state.keyData.mv_data(), state.valueData.mv_data(),
 							4, index.getIndexSplitPosition());
 					if (state.indexScore > 0) {
 						state.chunkInput.seek(state.minTuple);
@@ -287,7 +278,7 @@ class LmdbRecordIterator implements RecordIterator {
 				if (current == null && (current = state.chunkInput.next()) == null) {
 					lastResult = mdb_cursor_get(state.cursor, state.keyData, state.valueData, MDB_NEXT);
 					if (lastResult == MDB_SUCCESS) {
-						state.chunkInput = new ChunkInput(state.keyData.mv_data(), state.valueData.mv_data(),
+						state.chunkInput.reset(state.keyData.mv_data(), state.valueData.mv_data(),
 								4, index.getIndexSplitPosition());
 						current = state.chunkInput.next();
 						isChunkValue = false;
@@ -394,7 +385,7 @@ class LmdbRecordIterator implements RecordIterator {
 
 		if (chunkOutput == null) {
 			chunkBuffer.clear();
-			chunkOutput = new ChunkOutput(30, index.getIndexSplitPosition());
+			chunkOutput = new ChunkOutput(Chunks.MAX_CHUNK_SIZE, 4, index.getIndexSplitPosition());
 			// TODO add previous tuples to chunkOutput if they exist
 		}
 		remove = true;

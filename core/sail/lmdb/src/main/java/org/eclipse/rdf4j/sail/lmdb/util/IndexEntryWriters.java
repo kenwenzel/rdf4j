@@ -202,7 +202,7 @@ public final class IndexEntryWriters {
 		}
 	}
 
-	public static void write(long[] tuple, long first, long second, long third,	long fourth) {
+	public static void write(long[] tuple, long first, long second, long third, long fourth) {
 		tuple[0] = first;
 		tuple[1] = second;
 		tuple[2] = third;

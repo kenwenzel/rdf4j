@@ -98,6 +98,18 @@ class TripleIndex {
 		return accessors;
 	}
 
+	int compare(long[] subj, long[] pred, long[] obj, long[] context, int statementIndex, int otherStatementIndex) {
+		for (StatementFieldValueAccessor accessor : fieldValueAccessors) {
+			long value1 = accessor.get(subj, pred, obj, context, statementIndex);
+			long value2 = accessor.get(subj, pred, obj, context, otherStatementIndex);
+			int diff = Long.compare(value1, value2);
+			if (diff != 0) {
+				return diff;
+			}
+		}
+		return 0;
+	}
+
 	/**
 	 * Parses a comma/whitespace-separated list of index specifications. Index specifications are required to consists
 	 * of 4 characters: 's', 'p', 'o' and 'c'.
@@ -216,14 +228,6 @@ class TripleIndex {
 		pred = pred <= 0 ? Long.MAX_VALUE : pred;
 		obj = obj <= 0 ? Long.MAX_VALUE : obj;
 		context = context <= 0 ? Long.MAX_VALUE : context;
-		toEntry(tuple, subj, pred, obj, context);
-	}
-
-	void toFilter(long[] tuple, long subj, long pred, long obj, long context) {
-		subj = subj <= 0 ? 0 : subj;
-		pred = pred <= 0 ? 0 : pred;
-		obj = obj <= 0 ? 0 : obj;
-		context = context <= 0 ? 0 : context;
 		toEntry(tuple, subj, pred, obj, context);
 	}
 
