@@ -115,7 +115,7 @@ public class TripleStoreTest {
 
 	@Test
 	public void testLeadingFieldSortPreservesPriorOrderWithinGroups() throws Exception {
-		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingField", int[].class,
+		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
 				int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
 		method.setAccessible(true);
 		Field indexesField = TripleStore.class.getDeclaredField("indexes");
@@ -146,7 +146,7 @@ public class TripleStoreTest {
 
 		try (TripleStore ignoredPropertyStore = new TripleStore(ignoredPropertyDir, new LmdbStoreConfig("spoc,posc"),
 				null)) {
-			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingField", int[].class,
+			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
 					int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
 			method.setAccessible(true);
 			Field indexesField = TripleStore.class.getDeclaredField("indexes");
@@ -179,7 +179,7 @@ public class TripleStoreTest {
 
 	@Test
 	public void testLeadingFieldSortKeepsPriorOrderWhenLeadingValuesMatch() throws Exception {
-		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingField", int[].class,
+		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
 				int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
 		method.setAccessible(true);
 		Field indexesField = TripleStore.class.getDeclaredField("indexes");
@@ -202,7 +202,7 @@ public class TripleStoreTest {
 
 	@Test
 	public void testLeadingFieldSortPreservesDuplicateGroupOrder() throws Exception {
-		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingField", int[].class,
+		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
 				int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
 		method.setAccessible(true);
 		Field indexesField = TripleStore.class.getDeclaredField("indexes");
@@ -231,7 +231,7 @@ public class TripleStoreTest {
 		try (TripleStore orderedIndexStore = new TripleStore(orderedIndexDir,
 				new LmdbStoreConfig("spoc,psoc,opsc,ospc"),
 				null)) {
-			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingField", int[].class,
+			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
 					int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
 			method.setAccessible(true);
 			Field indexesField = TripleStore.class.getDeclaredField("indexes");
@@ -258,7 +258,7 @@ public class TripleStoreTest {
 
 	@Test
 	public void testLeadingFieldSortCompletesForEqualLeadingValues() throws Exception {
-		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingField", int[].class,
+		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
 				int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
 		method.setAccessible(true);
 		Field indexesField = TripleStore.class.getDeclaredField("indexes");
@@ -295,7 +295,7 @@ public class TripleStoreTest {
 
 		try (TripleStore orderedIndexStore = new TripleStore(orderedIndexDir, new LmdbStoreConfig("spoc,psoc,opsc"),
 				null)) {
-			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingField", int[].class,
+			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
 					int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
 			method.setAccessible(true);
 			Field indexesField = TripleStore.class.getDeclaredField("indexes");
@@ -338,7 +338,7 @@ public class TripleStoreTest {
 
 		try (TripleStore orderedIndexStore = new TripleStore(orderedIndexDir, new LmdbStoreConfig("spoc,psoc,ospc"),
 				null)) {
-			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingField", int[].class,
+			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
 					int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
 			method.setAccessible(true);
 			Field indexesField = TripleStore.class.getDeclaredField("indexes");

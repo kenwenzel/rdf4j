@@ -44,7 +44,7 @@ class TripleIndex {
 
 	@FunctionalInterface
 	interface StatementFieldValueAccessor {
-		long get(long[] subj, long[] pred, long[] obj, long[] context, int statementIndex);
+		long[] get(long[] subj, long[] pred, long[] obj, long[] context);
 	}
 
 	private final char[] fieldSeq;
@@ -98,18 +98,6 @@ class TripleIndex {
 		return accessors;
 	}
 
-	int compare(long[] subj, long[] pred, long[] obj, long[] context, int statementIndex, int otherStatementIndex) {
-		for (StatementFieldValueAccessor accessor : fieldValueAccessors) {
-			long value1 = accessor.get(subj, pred, obj, context, statementIndex);
-			long value2 = accessor.get(subj, pred, obj, context, otherStatementIndex);
-			int diff = Long.compare(value1, value2);
-			if (diff != 0) {
-				return diff;
-			}
-		}
-		return 0;
-	}
-
 	/**
 	 * Parses a comma/whitespace-separated list of index specifications. Index specifications are required to consists
 	 * of 4 characters: 's', 'p', 'o' and 'c'.
@@ -137,18 +125,13 @@ class TripleIndex {
 	}
 
 	private StatementFieldValueAccessor getFieldValueAccessor(char field) {
-		switch (field) {
-		case 's':
-			return (subj, pred, obj, context, statementIndex) -> subj[statementIndex];
-		case 'p':
-			return (subj, pred, obj, context, statementIndex) -> pred[statementIndex];
-		case 'o':
-			return (subj, pred, obj, context, statementIndex) -> obj[statementIndex];
-		case 'c':
-			return (subj, pred, obj, context, statementIndex) -> context[statementIndex];
-		default:
-			throw new IllegalArgumentException("Unknown index field: " + field);
-		}
+		return switch (field) {
+		case 's' -> (subj, pred, obj, context) -> subj;
+		case 'p' -> (subj, pred, obj, context) -> pred;
+		case 'o' -> (subj, pred, obj, context) -> obj;
+		case 'c' -> (subj, pred, obj, context) -> context;
+		default -> throw new IllegalArgumentException("Unknown index field: " + field);
+		};
 	}
 
 	protected int[] getIndexes(char[] fieldSeq) {

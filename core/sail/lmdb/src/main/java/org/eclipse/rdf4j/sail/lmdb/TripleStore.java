@@ -76,7 +76,6 @@ import java.util.function.IntConsumer;
 
 import org.eclipse.collections.api.iterator.LongIterator;
 import org.eclipse.collections.impl.map.mutable.primitive.LongIntHashMap;
-import org.eclipse.collections.impl.utility.primitive.IntQuickSort;
 import org.eclipse.rdf4j.common.annotation.Experimental;
 import org.eclipse.rdf4j.common.concurrent.locks.StampedLongAdderLockManager;
 import org.eclipse.rdf4j.query.algebra.evaluation.sketch.SketchBasedJoinEstimator.Component;
@@ -471,6 +470,7 @@ class TripleStore implements Closeable {
 					caughtExceptions.add(e);
 				}
 			}
+			updater.close();
 			for (TripleIndex index : indexes) {
 				try {
 					index.close();
@@ -1149,6 +1149,8 @@ class TripleStore implements Closeable {
 		storeTriplesAligned(subj, pred, obj, context, count, explicit, null);
 	}
 
+	private final ChunkUpdater updater = new ChunkUpdater();
+
 	@Experimental
 	public void storeTriplesAligned(long[] subj, long[] pred, long[] obj, long[] context, int count, boolean explicit,
 			IntConsumer addedIndexConsumer) throws IOException {
@@ -1239,7 +1241,6 @@ class TripleStore implements Closeable {
 			}
 
 			char[] currentFieldSeq = mainIndex.getFieldSeq();
-			ChunkUpdater updater = new ChunkUpdater(stack);
 			updater.setSortedInsertion(true);
 			for (int i = 1; i < indexes.size(); i++) {
 				TripleIndex index = indexes.get(i);
@@ -1248,9 +1249,7 @@ class TripleStore implements Closeable {
 						index.getFieldSeq())) {
 					System.arraycopy(mainOrderIndices, 0, sortedIndices, 0, addedCount);
 				}
-				IntQuickSort.sort(sortedIndices, 0, addedCount - 1,
-						(a, b) -> index.compare(subj, pred, obj, context, a, b));
-				// sortStatementIndicesByLeadingField(sortedIndices, addedCount, index, subj, pred, obj, context);
+				sortStatementIndicesByLeadingFields(sortedIndices, addedCount, index, subj, pred, obj, context);
 				currentFieldSeq = index.getFieldSeq();
 				long secondaryWriteCursor = addedCount > 0 ? getAlignedWriteCursor(i, index, explicit, cursorHandle)
 						: 0;
@@ -1352,21 +1351,57 @@ class TripleStore implements Closeable {
 		}
 	}
 
-	void sortStatementIndicesByLeadingField(int[] statementIndices, int length, TripleIndex index, long[] subj,
+	void sortStatementIndicesByLeadingFields(int[] statementIndices, int length, TripleIndex index, long[] subj,
 			long[] pred, long[] obj, long[] context) {
 		if (length < 2) {
 			return;
 		}
 		long[] leadingValues = ensureLeadingFieldValues(length);
-		StatementFieldValueAccessor leadingFieldValueAccessor = index.leadingFieldValueAccessor;
-		for (int i = 0; i < length; i++) {
-			int statementIndex = statementIndices[i];
-			leadingValues[i] = leadingFieldValueAccessor.get(subj, pred, obj, context, statementIndex);
-		}
 		int[] scratchIndices = ensureLeadingFieldScratchIndices(length);
 		long[] scratchValues = ensureLeadingFieldScratchValues(length);
-		LeadingFieldSorters.lsdRadixSort(statementIndices, leadingValues, length, scratchIndices, scratchValues,
-				leadingFieldRadixCounts, leadingFieldRadixOffsets);
+
+		boolean first = true;
+		int fromStart = 0;
+		int nextLength = length;
+		for (StatementFieldValueAccessor fieldValueAccessor : index.fieldValueAccessors) {
+			long[] fieldValues = fieldValueAccessor.get(subj, pred, obj, context);
+
+			if (first) {
+				System.arraycopy(fieldValues, 0, leadingValues, 0, length);
+				LeadingFieldSorters.lsdRadixSort(statementIndices, leadingValues, 0, length, scratchIndices,
+						scratchValues,
+						leadingFieldRadixCounts, leadingFieldRadixOffsets);
+				first = false;
+			} else {
+				boolean sortingNecessary = false;
+				int from = fromStart;
+				length = nextLength;
+				while (from < length) {
+					int to = from + 1;
+					long firstValue = leadingValues[from];
+
+					while (to < length && leadingValues[to] == firstValue) {
+						to++;
+					}
+
+					if (to - from > 1) {
+						if (!sortingNecessary) {
+							fromStart = from;
+							sortingNecessary = true;
+						}
+						nextLength = to;
+						System.arraycopy(fieldValues, from, leadingValues, from, to - from);
+						LeadingFieldSorters.lsdRadixSort(statementIndices, leadingValues, from, to - from,
+								scratchIndices, scratchValues,
+								leadingFieldRadixCounts, leadingFieldRadixOffsets);
+					}
+					from = to;
+				}
+				if (!sortingNecessary) {
+					break;
+				}
+			}
+		}
 	}
 
 	private int[] ensureLeadingFieldScratchIndices(int length) {
