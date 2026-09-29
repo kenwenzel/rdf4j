@@ -515,7 +515,7 @@ class ValueStore extends AbstractValueFactory {
 	private void initTripleTermIndexes(Set<String> indexSpecs) throws IOException {
 		for (String fieldSeq : TripleIndex.orderIndexSpecs(indexSpecs)) {
 			logger.trace("Initializing index '{}'...", fieldSeq);
-			var index = new TripleIndex("term-" + fieldSeq, fieldSeq, 2, false, env, writeTxn);
+			var index = new TripleIndex("term-" + fieldSeq, fieldSeq, 0, false, env, writeTxn);
 			tripleTermIndexes.add(index);
 			// ensure simple access to main indexes
 			switch (fieldSeq) {
@@ -549,7 +549,7 @@ class ValueStore extends AbstractValueFactory {
 				for (String fieldSeq : addedIndexSpecs) {
 					logger.debug("Initializing new index '{}'...", fieldSeq);
 
-					TripleIndex addedIndex = new TripleIndex("term-" + fieldSeq, fieldSeq, 2, false, env, writeTxn);
+					TripleIndex addedIndex = new TripleIndex("term-" + fieldSeq, fieldSeq, 0, false, env, writeTxn);
 					RecordIterator[] sourceIter = { null };
 					try {
 						sourceIter[0] = new LmdbRecordIterator(sourceIndex, 0, -1, -1, -1, -1,
@@ -1879,7 +1879,7 @@ class ValueStore extends AbstractValueFactory {
 								}
 
 								int splitPoint = tripleTermCspoIndex.getIndexSplitPosition();
-								long[] pattern = new long[] { id, 0, 0, 0 };
+								long[] pattern = new long[] { id, -1, -1, -1 };
 								Chunks.deleteFromChunk(termsCursor, splitPoint, keyVal, dataVal, pattern, true,
 										keyScratch, valueScratch);
 							} else {

@@ -216,7 +216,9 @@ class LmdbRecordIterator implements RecordIterator {
 				if ((current = state.chunkInput.next()) == null) {
 					if (editChunk) {
 						try {
-							flush();
+							if (flush()) {
+								editChunk = false;
+							}
 						} catch (IOException e) {
 							throw new SailException(e);
 						}
@@ -265,7 +267,9 @@ class LmdbRecordIterator implements RecordIterator {
 				if (current == null && (current = state.chunkInput.next()) == null) {
 					if (editChunk) {
 						try {
-							flush();
+							if (flush()) {
+								editChunk = false;
+							}
 						} catch (IOException e) {
 							throw new SailException(e);
 						}
@@ -288,14 +292,14 @@ class LmdbRecordIterator implements RecordIterator {
 						}
 						break;
 					}
+				}
 
-					if (matchValues && !Chunks.matches(state.indexScore, state.patternTuple, current)) {
-						if (editChunk) {
-							state.chunkOutput.addTuple(current);
-						}
-						current = null;
-						continue;
+				if (matchValues && !Chunks.matches(state.indexScore, state.patternTuple, current)) {
+					if (editChunk) {
+						state.chunkOutput.addTuple(current);
 					}
+					current = null;
+					continue;
 				}
 
 				// Matching value found
@@ -353,7 +357,7 @@ class LmdbRecordIterator implements RecordIterator {
 		}
 	}
 
-	private void flush() throws IOException {
+	private boolean flush() throws IOException {
 		if (state.chunkOutput != null) {
 			long[] current;
 			while ((current = state.chunkInput.next()) != null) {
@@ -382,7 +386,9 @@ class LmdbRecordIterator implements RecordIterator {
 			}
 			state.chunkOutput = null;
 			state.removeAnchor = false;
+			return true;
 		}
+		return false;
 	}
 
 	boolean remove = false;

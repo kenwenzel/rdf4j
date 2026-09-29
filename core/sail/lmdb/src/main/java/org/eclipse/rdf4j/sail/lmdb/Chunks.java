@@ -200,12 +200,34 @@ public class Chunks {
 			throws IOException {
 		keyScratch.clear();
 		int keyPrefixLength;
-		for (int i = 0; i < splitPoint; i++) {
-			Varint.writeUnsigned(keyScratch, tuple[i]);
-		}
-		keyPrefixLength = keyScratch.position();
-		for (int i = splitPoint; i < tuple.length; i++) {
-			Varint.writeUnsigned(keyScratch, tuple[i]);
+		if (matchPrefix) {
+			// allows to use -1 as a wildcard, so we can delete all tuples that match a given prefix
+			boolean prefixFinished = false;
+			for (int i = 0; i < splitPoint; i++) {
+				if (tuple[i] != -1) {
+					Varint.writeUnsigned(keyScratch, tuple[i]);
+				} else {
+					prefixFinished = true;
+					break;
+				}
+			}
+			keyPrefixLength = keyScratch.position();
+			if (!prefixFinished) {
+				for (int i = splitPoint; i < tuple.length; i++) {
+					if (tuple[i] == -1) {
+						break;
+					}
+					Varint.writeUnsigned(keyScratch, tuple[i]);
+				}
+			}
+		} else {
+			for (int i = 0; i < splitPoint; i++) {
+				Varint.writeUnsigned(keyScratch, tuple[i]);
+			}
+			keyPrefixLength = keyScratch.position();
+			for (int i = splitPoint; i < tuple.length; i++) {
+				Varint.writeUnsigned(keyScratch, tuple[i]);
+			}
 		}
 		keyScratch.flip();
 
@@ -240,7 +262,10 @@ public class Chunks {
 			if (rc == MDB_SUCCESS) {
 				existingKey = keyVal.mv_data();
 				if (compareRegion(keyScratch, 0, existingKey, 0, keyPrefixLength) == 0) {
-					if (compareRegion(keyScratch, 0, existingKey, 0,
+					if (matchPrefix && compareRegion(keyScratch, 0, existingKey, 0,
+							Math.min(keyScratch.remaining(), existingKey.remaining())) == 0) {
+						hasExistingChunk = true;
+					} else if (compareRegion(keyScratch, 0, existingKey, 0,
 							Math.min(keyScratch.remaining(), existingKey.remaining())) > 0) {
 						hasExistingChunk = true;
 					}

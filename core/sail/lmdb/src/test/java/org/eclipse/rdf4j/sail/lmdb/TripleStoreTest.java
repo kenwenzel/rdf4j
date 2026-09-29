@@ -137,47 +137,6 @@ public class TripleStoreTest {
 	}
 
 	@Test
-	public void testLeadingFieldSortIgnoresFullKeySortProperty() throws Exception {
-		String previousAlignedWriteStrategy = System.getProperty("rdf4j.lmdb.alignedWriteStrategy");
-		System.setProperty("rdf4j.lmdb.alignedWriteStrategy", "FULL_KEY_SORT");
-
-		File ignoredPropertyDir = new File(dataDir, "ignored-full-key-sort-property");
-		ignoredPropertyDir.mkdirs();
-
-		try (TripleStore ignoredPropertyStore = new TripleStore(ignoredPropertyDir, new LmdbStoreConfig("spoc,posc"),
-				null)) {
-			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
-					int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
-			method.setAccessible(true);
-			Field indexesField = TripleStore.class.getDeclaredField("indexes");
-			indexesField.setAccessible(true);
-
-			@SuppressWarnings("unchecked")
-			List<TripleIndex> indexes = (List<TripleIndex>) indexesField
-					.get(ignoredPropertyStore);
-
-			int[] statementIndices = { 0, 1, 2, 3 };
-			long[] subj = { 101, 102, 103, 104 };
-			long[] pred = { 7, 7, 7, 7 };
-			long[] obj = { 20, 10, 40, 30 };
-			long[] context = { 0, 0, 0, 0 };
-
-			method.invoke(ignoredPropertyStore, statementIndices, statementIndices.length, indexes.get(1), subj, pred,
-					obj,
-					context);
-
-			assertEquals("Leading-field sort should ignore legacy full-key strategy configuration",
-					Arrays.toString(new int[] { 0, 1, 2, 3 }), Arrays.toString(statementIndices));
-		} finally {
-			if (previousAlignedWriteStrategy == null) {
-				System.clearProperty("rdf4j.lmdb.alignedWriteStrategy");
-			} else {
-				System.setProperty("rdf4j.lmdb.alignedWriteStrategy", previousAlignedWriteStrategy);
-			}
-		}
-	}
-
-	@Test
 	public void testLeadingFieldSortKeepsPriorOrderWhenLeadingValuesMatch() throws Exception {
 		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
 				int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
