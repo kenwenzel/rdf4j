@@ -189,17 +189,15 @@ public class Chunks {
 	 * @param keyVal       the key buffer used for cursor operations
 	 * @param dataVal      the data buffer used for cursor operations
 	 * @param tuple        the encoded tuple to remove
+	 * @param matchPrefix  whether to match only the prefix of the tuple
 	 * @param keyScratch   scratch buffer used to encode replacement chunks
 	 * @param valueScratch scratch buffer used to encode replacement chunks
 	 * @return {@code true} if the tuple was removed, otherwise {@code false}
 	 * @throws IOException if tuple decoding or encoding fails
 	 */
 	public static boolean deleteFromChunk(long cursor, int splitPoint, MDBVal keyVal, MDBVal dataVal,
-			long[] tuple, ByteBuffer keyScratch, ByteBuffer valueScratch)
+			long[] tuple, boolean matchPrefix, ByteBuffer keyScratch, ByteBuffer valueScratch)
 			throws IOException {
-		if (Arrays.equals(tuple, new long[] { 43, 1250, 2790486, 1 })) {
-			System.out.println("Debug deleteFromChunk for tuple: " + Arrays.toString(tuple));
-		}
 		keyScratch.clear();
 		int keyPrefixLength;
 		for (int i = 0; i < splitPoint; i++) {
@@ -217,15 +215,18 @@ public class Chunks {
 		ByteBuffer existingData = null;
 		boolean isAnchorKey = false;
 		// Position cursor at the anchor key. If the data value is empty, delete the key and return true.
-		int rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET));
-		if (rc == MDB_SUCCESS) {
-			existingKey = keyVal.mv_data();
-			existingData = dataVal.mv_data();
-			if (existingData.remaining() == 0) {
-				E(mdb_cursor_del(cursor, 0));
-				return true;
+		int rc;
+		if (!matchPrefix) {
+			rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET));
+			if (rc == MDB_SUCCESS) {
+				existingKey = keyVal.mv_data();
+				existingData = dataVal.mv_data();
+				if (existingData.remaining() == 0) {
+					E(mdb_cursor_del(cursor, 0));
+					return true;
+				}
+				isAnchorKey = true;
 			}
-			isAnchorKey = true;
 		}
 
 		if (!isAnchorKey) {
@@ -260,8 +261,12 @@ public class Chunks {
 		if (!isAnchorKey) {
 			int diff = existing.seek(tuple, chunk1::addTuple);
 			if (diff != 0) {
-				chunkPool.offer(chunk1);
-				return false;
+				if (!matchPrefix || diff < 0) {
+					// The tuple to delete is not present in the chunk, and we are not matching by prefix, or the tuple
+					// is less than the first tuple in the chunk.
+					chunkPool.offer(chunk1);
+					return false;
+				}
 			}
 		}
 

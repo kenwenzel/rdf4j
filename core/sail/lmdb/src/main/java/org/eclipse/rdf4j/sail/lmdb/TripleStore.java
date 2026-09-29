@@ -988,8 +988,7 @@ class TripleStore implements Closeable {
 	int localCount = 0;
 
 	boolean statementExists(long[] tuple, int splitPoint, long cursor, MDBVal keyVal, MDBVal dataVal,
-			ByteBuffer keyScratch)
-			throws IOException {
+			ByteBuffer keyScratch) throws IOException {
 		keyScratch.clear();
 		int keyPrefixLength;
 		for (int i = 0; i < splitPoint; i++) {
@@ -1010,9 +1009,13 @@ class TripleStore implements Closeable {
 		rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET_RANGE));
 		if (rc == MDB_SUCCESS) {
 			E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_PREV));
+		} else {
+			rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_LAST));
+		}
+		if (rc == MDB_SUCCESS) {
 			if (compareRegion(keyScratch, 0, keyVal.mv_data(), 0, keyPrefixLength) == 0) {
-				var input = new ChunkInput(keyVal.mv_data(), dataVal.mv_data(), 4, splitPoint);
-				return input.seek(tuple) == 0;
+				chunkInput.reset(keyVal.mv_data(), dataVal.mv_data(), 4, splitPoint);
+				return chunkInput.seek(tuple) == 0;
 			}
 		}
 		return false;
@@ -1096,7 +1099,7 @@ class TripleStore implements Closeable {
 				cursor = pCursor.get(0);
 				try {
 					foundImplicit = Chunks.deleteFromChunk(cursor, mainIndex.getIndexSplitPosition(), keyVal,
-							dataVal, tuple, keyScratch, valueScratch);
+							dataVal, tuple, false, keyScratch, valueScratch);
 				} finally {
 					mdb_cursor_close(cursor);
 				}
@@ -1111,7 +1114,7 @@ class TripleStore implements Closeable {
 						mdb_cursor_open(writeTxn, index.getDB(false), pCursor);
 						cursor = pCursor.get(0);
 						try {
-							Chunks.deleteFromChunk(cursor, index.getIndexSplitPosition(), keyVal, dataVal, tuple,
+							Chunks.deleteFromChunk(cursor, index.getIndexSplitPosition(), keyVal, dataVal, tuple, false,
 									keyScratch, valueScratch);
 						} finally {
 							mdb_cursor_close(cursor);
@@ -1149,6 +1152,7 @@ class TripleStore implements Closeable {
 	}
 
 	private final ChunkUpdater updater = new ChunkUpdater();
+	private final ChunkInput chunkInput = new ChunkInput();
 
 	@Experimental
 	public void storeTriplesAligned(long[] subj, long[] pred, long[] obj, long[] context, int count, boolean explicit,
@@ -1213,7 +1217,7 @@ class TripleStore implements Closeable {
 							inferredMainDeleteCursor = inferredDeleteCursorHandle.get(0);
 						}
 						promotedFromImplicit[i] = Chunks.deleteFromChunk(inferredMainDeleteCursor,
-								mainIndex.getIndexSplitPosition(), keyVal, dataVal, tuple,
+								mainIndex.getIndexSplitPosition(), keyVal, dataVal, tuple, false,
 								keyScratch, valueScratch);
 					}
 					contextIncrements.addToValue(context[i], 1);
@@ -1266,7 +1270,7 @@ class TripleStore implements Closeable {
 
 					if (promotedFromImplicit[statementIndex]) {
 						Chunks.deleteFromChunk(secondaryDeleteCursor, index.getIndexSplitPosition(), keyVal,
-								dataVal, tuple, keyScratch, valueScratch);
+								dataVal, tuple, false, keyScratch, valueScratch);
 					}
 					if (shouldFallBackFromAlignedWrite()) {
 						updater.flush(secondaryWriteCursor, keyVal, dataVal);
@@ -1635,7 +1639,7 @@ class TripleStore implements Closeable {
 					E(mdb_cursor_open(writeTxn, index.getDB(explicit), pCursor));
 					long cursor = pCursor.get(0);
 					try {
-						Chunks.deleteFromChunk(cursor, index.getIndexSplitPosition(), keyValue, dataValue, tuple,
+						Chunks.deleteFromChunk(cursor, index.getIndexSplitPosition(), keyValue, dataValue, tuple, false,
 								keyScratch, valueScratch);
 					} finally {
 						mdb_cursor_close(cursor);
@@ -1697,6 +1701,7 @@ class TripleStore implements Closeable {
 									keyScratch, valueScratch));
 						} else {
 							E(Chunks.deleteFromChunk(cursor, index.getIndexSplitPosition(), keyVal, dataVal, tuple,
+									false,
 									keyScratch, valueScratch) ? MDB_SUCCESS : MDB_NOTFOUND);
 						}
 						i++;
