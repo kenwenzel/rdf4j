@@ -26,20 +26,17 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 import java.util.TreeSet;
-import java.util.stream.IntStream;
 
-import org.eclipse.collections.api.list.primitive.IntList;
+import org.apache.commons.lang3.mutable.MutableInt;
 import org.eclipse.collections.api.list.primitive.MutableIntList;
 import org.eclipse.collections.api.list.primitive.MutableLongList;
-import org.eclipse.collections.impl.list.mutable.MutableListFactoryImpl;
 import org.eclipse.collections.impl.list.mutable.primitive.MutableIntListFactoryImpl;
 import org.eclipse.collections.impl.list.mutable.primitive.MutableLongListFactoryImpl;
-import org.eclipse.collections.impl.utility.primitive.IntQuickSort;
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkInput;
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkOutput;
-import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.util.lmdb.MDBVal;
 
@@ -61,15 +58,8 @@ public final class ChunkUpdater {
 
 	final ChunkInput chunkInput = new ChunkInput();
 	final MutableLongList newTuplesList = MutableLongListFactoryImpl.INSTANCE.empty();
-	final TreeSet<Integer> newTuplesIndexes = new TreeSet<>((a, b) -> {
-		for (int i = 0; i < tupleLength; i++) {
-			int diff = Long.compare(newTuplesList.get(a + i), newTuplesList.get(b + i));
-			if (diff != 0) {
-				return diff;
-			}
-		}
-		return 0;
-	});
+	final MutableIntList newTuplesIndexes = MutableIntListFactoryImpl.INSTANCE.empty();
+	final BitSet simpleBloomFilter = new BitSet(4096);
 
 	ChunkUpdater() {
 		this.anchorKeyScratch = MemoryUtil.memAlloc(TripleIndex.MAX_KEY_LENGTH);
@@ -94,6 +84,12 @@ public final class ChunkUpdater {
 	 */
 	void setSortedInsertion(boolean sortedInsertion) {
 		this.sortedInsertion = sortedInsertion;
+	}
+
+	private void addTupleToChunk(long[] tuple) {
+		if (activeChunkIndex < 0 || !chunks.get(activeChunkIndex).addTuple(tuple)) {
+			getNextChunk().addTuple(tuple);
+		}
 	}
 
 	/**
@@ -123,9 +119,9 @@ public final class ChunkUpdater {
 		anchorKeyScratch.flip();
 
 		if (existingAnchorKey != null && compareRegion(anchorKeyScratch, 0, existingAnchorKey, 0,
-				Math.min(anchorKeyScratch.remaining(), existingAnchorKey.remaining())) > 0 &&
+				Math.min(anchorKeyScratch.limit(), existingAnchorKey.limit())) > 0 &&
 				(existingNextAnchorKey == null || compareRegion(anchorKeyScratch, 0, existingNextAnchorKey, 0,
-						Math.min(anchorKeyScratch.remaining(), existingNextAnchorKey.remaining())) < 0)) {
+						Math.min(anchorKeyScratch.limit(), existingNextAnchorKey.limit())) < 0)) {
 			// We are still in the same duplicate chunk, so we can skip the LMDB lookup.
 		} else {
 			boolean merge = false;
@@ -149,7 +145,7 @@ public final class ChunkUpdater {
 				keyBuffer = keyVal.mv_data();
 				if (compareRegion(anchorKeyScratch, 0, keyBuffer, 0, keyPrefixLength) == 0) {
 					if (compareRegion(anchorKeyScratch, 0, keyBuffer, 0,
-							Math.min(anchorKeyScratch.remaining(), keyBuffer.remaining())) > 0) {
+							Math.min(anchorKeyScratch.limit(), keyBuffer.limit())) > 0) {
 						merge = true;
 					}
 				}
@@ -158,7 +154,7 @@ public final class ChunkUpdater {
 			ByteBuffer dataBuffer = null;
 			if (merge) {
 				if (existingAnchorKey != null && existingAnchorKeyAddress != MemoryUtil.memAddress(keyBuffer) ||
-						existingAnchorKey == null && !newTuplesList.isEmpty()) {
+						existingAnchorKey == null && (activeChunkIndex >= 0 || !newTuplesList.isEmpty())) {
 					tmpKey.clear().put(anchorKeyScratch);
 					flush(cursor, keyVal, dataVal);
 
@@ -178,6 +174,8 @@ public final class ChunkUpdater {
 				} else {
 					dataBuffer = dataVal.mv_data();
 				}
+			} else if (existingAnchorKey != null) {
+				flush(cursor, keyVal, dataVal);
 			}
 
 			if (merge && existingAnchorKey == null) {
@@ -194,39 +192,50 @@ public final class ChunkUpdater {
 				existingNextAnchorKey = nextKey;
 				existingAnchorKeyAddress = MemoryUtil.memAddress(existingAnchorKey);
 				existingBuffer = dataBuffer;
-				chunkInput.reset();
+				chunkInput.rewind();
 			}
 		}
 
 		if (existingBuffer != null) {
 			if (!sortedInsertion) {
-				chunkInput.reset();
+				chunkInput.rewind();
 				if (chunkInput.seek(tuple) == 0) {
 					return MDB_KEYEXIST;
 				}
 			} else {
-				if (chunkInput.seek(tuple, t -> {
-					if (activeChunkIndex < 0 || !chunks.get(activeChunkIndex).addTuple(t)) {
-						getNextChunk().addTuple(t);
-					}
-				}) == 0) {
+				if (chunkInput.seek(tuple, this::addTupleToChunk) == 0) {
 					return MDB_KEYEXIST;
 				}
 			}
 		}
 
 		if (sortedInsertion) {
-			if (activeChunkIndex < 0 || !chunks.get(activeChunkIndex).addTuple(tuple)) {
-				getNextChunk().addTuple(tuple);
-			}
+			addTupleToChunk(tuple);
 			return MDB_SUCCESS;
 		}
 
-		int pos = newTuplesList.size();
-		newTuplesList.addAll(tuple);
-		if (!newTuplesIndexes.add(pos)) {
-			return MDB_KEYEXIST;
+		int hash = Arrays.hashCode(tuple);
+		if (simpleBloomFilter.get(hash & 0xFFF)) {
+			// The tuple may already exist in the pending set, so check for duplicates.
+			for (int i = 0; i < newTuplesList.size(); i += tupleLength) {
+				boolean match = true;
+				for (int j = 0; j < tupleLength; j++) {
+					if (newTuplesList.get(i + j) != tuple[j]) {
+						match = false;
+						break;
+					}
+				}
+				if (match) {
+					return MDB_KEYEXIST;
+				}
+			}
+		} else {
+			simpleBloomFilter.set(hash & 0xFFF);
 		}
+
+		int pos = newTuplesList.size();
+		newTuplesIndexes.add(pos);
+		newTuplesList.addAll(tuple);
 		return MDB_SUCCESS;
 	}
 
@@ -268,13 +277,24 @@ public final class ChunkUpdater {
 			chunk = activeChunkIndex >= 0 ? chunks.get(activeChunkIndex) : getNextChunk();
 		} else {
 			if (hasExisting) {
-				chunkInput.reset();
+				chunkInput.rewind();
 				existingTuple = chunkInput.next();
 			}
 
 			chunk = getNextChunk();
 			long[] newTuple = new long[tupleLength];
-			for (int tupleIndex : newTuplesIndexes) {
+			newTuplesIndexes.sortThis((a, b) -> {
+				for (int j = 0; j < tupleLength; j++) {
+					int cmp = Long.compare(newTuplesList.get(a + j), newTuplesList.get(b + j));
+					if (cmp != 0) {
+						return cmp;
+					}
+				}
+				return 0;
+			});
+			int count = newTuplesIndexes.size();
+			for (int i = 0; i < count; i++) {
+				int tupleIndex = newTuplesIndexes.get(i);
 				for (int j = 0; j < tupleLength; j++) {
 					newTuple[j] = newTuplesList.get(tupleIndex + j);
 				}
@@ -308,20 +328,14 @@ public final class ChunkUpdater {
 			}
 		}
 
-		if (hasExisting) {
-			existingAnchorKey.rewind();
-			keyVal.mv_data(existingAnchorKey);
-			int rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET));
-			if (rc == MDB_SUCCESS) {
-				// System.out.println("delete key " + Varint.readUnsigned(targetKey, 0) + " value " +
-				// valueToString(existingBuffer));
-				// Replace the selected duplicate value with one or two newly encoded duplicate values.
-				E(mdb_cursor_del(cursor, 0));
-			} else {
-				// should not happen
-				throw new IOException("Key not found: " + existingAnchorKey);
-			}
-		}
+		/*
+		 * if (hasExisting) { existingAnchorKey.rewind(); keyVal.mv_data(existingAnchorKey); int rc =
+		 * E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET)); if (rc == MDB_SUCCESS) { //
+		 * System.out.println("delete key " + Varint.readUnsigned(targetKey, 0) + " value " + //
+		 * valueToString(existingBuffer)); // Replace the selected duplicate value with one or two newly encoded
+		 * duplicate values. E(mdb_cursor_del(cursor, 0)); } else { // should not happen throw new
+		 * IOException("Key not found: " + existingAnchorKey); } }
+		 */
 
 		for (int i = 0; i <= activeChunkIndex; i++) {
 			ChunkOutput c = chunks.get(i);
@@ -333,6 +347,20 @@ public final class ChunkUpdater {
 		reset(tupleLength, splitPoint);
 	}
 
+	String keyToString(ByteBuffer keyBuffer) {
+		StringBuilder sb = new StringBuilder();
+		int pos = 0;
+		while (pos < keyBuffer.limit()) {
+			if (sb.length() > 0) {
+				sb.append(", ");
+			}
+			long value = Varint.readUnsigned(keyBuffer, pos);
+			sb.append(value);
+			pos += Varint.calcLengthUnsigned(value);
+		}
+		return sb.toString();
+	}
+
 	/**
 	 * Clears all buffered state so the updater can be reused for the next key.
 	 */
@@ -342,8 +370,9 @@ public final class ChunkUpdater {
 		existingAnchorKey = null;
 		existingNextAnchorKey = null;
 		existingBuffer = null;
-		newTuplesIndexes.clear();
+		simpleBloomFilter.clear();
 		newTuplesList.clear();
+		newTuplesIndexes.clear();
 		activeChunkIndex = -1;
 	}
 

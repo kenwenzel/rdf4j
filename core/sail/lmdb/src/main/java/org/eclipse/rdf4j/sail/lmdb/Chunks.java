@@ -24,6 +24,7 @@ import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_put;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkInput;
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkOutput;
@@ -196,6 +197,9 @@ public class Chunks {
 	public static boolean deleteFromChunk(long cursor, int splitPoint, MDBVal keyVal, MDBVal dataVal,
 			long[] tuple, ByteBuffer keyScratch, ByteBuffer valueScratch)
 			throws IOException {
+		if (Arrays.equals(tuple, new long[] { 43, 1250, 2790486, 1 })) {
+			System.out.println("Debug deleteFromChunk for tuple: " + Arrays.toString(tuple));
+		}
 		keyScratch.clear();
 		int keyPrefixLength;
 		for (int i = 0; i < splitPoint; i++) {
@@ -209,11 +213,15 @@ public class Chunks {
 
 		keyVal.mv_data(keyScratch);
 
+		ByteBuffer existingKey = null;
+		ByteBuffer existingData = null;
 		boolean isAnchorKey = false;
 		// Position cursor at the anchor key. If the data value is empty, delete the key and return true.
 		int rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET));
 		if (rc == MDB_SUCCESS) {
-			if (dataVal.mv_data().remaining() == 0) {
+			existingKey = keyVal.mv_data();
+			existingData = dataVal.mv_data();
+			if (existingData.remaining() == 0) {
 				E(mdb_cursor_del(cursor, 0));
 				return true;
 			}
@@ -224,9 +232,15 @@ public class Chunks {
 			boolean hasExistingChunk = false;
 			rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_SET_RANGE));
 			if (rc == MDB_SUCCESS) {
-				rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_PREV));
-				if (rc == MDB_SUCCESS) {
-					if (compareRegion(keyScratch, 0, keyVal.mv_data(), 0, keyPrefixLength) == 0) {
+				E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_PREV));
+			} else {
+				rc = E(mdb_cursor_get(cursor, keyVal, dataVal, MDB_LAST));
+			}
+			if (rc == MDB_SUCCESS) {
+				existingKey = keyVal.mv_data();
+				if (compareRegion(keyScratch, 0, existingKey, 0, keyPrefixLength) == 0) {
+					if (compareRegion(keyScratch, 0, existingKey, 0,
+							Math.min(keyScratch.remaining(), existingKey.remaining())) > 0) {
 						hasExistingChunk = true;
 					}
 				}
@@ -237,12 +251,11 @@ public class Chunks {
 			}
 		}
 
-		if (isAnchorKey && dataVal.mv_data().remaining() == 0) {
-			E(mdb_cursor_del(cursor, 0));
-			return true;
+		if (existingData == null) {
+			existingData = dataVal.mv_data();
 		}
 
-		var existing = new ChunkInput(keyVal.mv_data(), dataVal.mv_data(), 4, splitPoint);
+		var existing = new ChunkInput(existingKey, existingData, 4, splitPoint);
 		var chunk1 = getChunk(4, splitPoint);
 		if (!isAnchorKey) {
 			int diff = existing.seek(tuple, chunk1::addTuple);
@@ -283,11 +296,11 @@ public class Chunks {
 		return 0;
 	}
 
-	public static boolean matches(long[] pattern, long[] tuple) {
+	public static boolean matches(int offset, long[] pattern, long[] tuple) {
 		if (pattern.length != tuple.length) {
 			return false;
 		}
-		for (int i = 0; i < pattern.length; i++) {
+		for (int i = offset; i < pattern.length; i++) {
 			if (pattern[i] != -1 && pattern[i] != tuple[i]) {
 				return false;
 			}

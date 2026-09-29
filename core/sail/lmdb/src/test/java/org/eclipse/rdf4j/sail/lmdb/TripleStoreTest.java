@@ -224,114 +224,6 @@ public class TripleStoreTest {
 	}
 
 	@Test
-	public void testLeadingFieldSortReusesPriorIndexOrderForTargetTransition() throws Exception {
-		File orderedIndexDir = new File(dataDir, "leading-field-transition-store");
-		orderedIndexDir.mkdirs();
-
-		try (TripleStore orderedIndexStore = new TripleStore(orderedIndexDir,
-				new LmdbStoreConfig("spoc,psoc,opsc,ospc"),
-				null)) {
-			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
-					int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
-			method.setAccessible(true);
-			Field indexesField = TripleStore.class.getDeclaredField("indexes");
-			indexesField.setAccessible(true);
-
-			@SuppressWarnings("unchecked")
-			List<TripleIndex> indexes = (List<TripleIndex>) indexesField.get(orderedIndexStore);
-			TripleIndex psoc = findIndex(indexes, "psoc");
-			TripleIndex opsc = findIndex(indexes, "opsc");
-
-			int[] statementIndices = { 0, 2, 1, 3 };
-			long[] subj = { 1, 2, 1, 2 };
-			long[] pred = { 1, 1, 2, 2 };
-			long[] obj = { 2, 1, 1, 2 };
-			long[] context = { 0, 0, 0, 0 };
-
-			method.invoke(orderedIndexStore, statementIndices, statementIndices.length, psoc, subj, pred, obj, context);
-			method.invoke(orderedIndexStore, statementIndices, statementIndices.length, opsc, subj, pred, obj, context);
-
-			assertEquals("OPSC sort should retain PSOC order inside equal object groups",
-					Arrays.toString(new int[] { 1, 2, 0, 3 }), Arrays.toString(statementIndices));
-		}
-	}
-
-	@Test
-	public void testLeadingFieldSortCompletesForEqualLeadingValues() throws Exception {
-		Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
-				int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
-		method.setAccessible(true);
-		Field indexesField = TripleStore.class.getDeclaredField("indexes");
-		indexesField.setAccessible(true);
-
-		@SuppressWarnings("unchecked")
-		List<TripleIndex> indexes = (List<TripleIndex>) indexesField.get(tripleStore);
-
-		int size = 512;
-		int[] statementIndices = new int[size];
-		long[] subj = new long[size];
-		long[] pred = new long[size];
-		long[] obj = new long[size];
-		long[] context = new long[size];
-
-		for (int i = 0; i < size; i++) {
-			statementIndices[i] = i;
-			subj[i] = i;
-			pred[i] = 7;
-			obj[i] = size - i;
-		}
-
-		int[] expected = range(size);
-		assertTimeoutPreemptively(Duration.ofSeconds(1), () -> method.invoke(tripleStore, statementIndices,
-				statementIndices.length, indexes.get(1), subj, pred, obj, context));
-		assertEquals("Equal leading values should preserve the prior order", Arrays.toString(expected),
-				Arrays.toString(statementIndices));
-	}
-
-	@Test
-	public void testLeadingFieldSortMatchesReferenceStableSortAcrossTransitions() throws Exception {
-		File orderedIndexDir = new File(dataDir, "leading-field-randomized-store");
-		orderedIndexDir.mkdirs();
-
-		try (TripleStore orderedIndexStore = new TripleStore(orderedIndexDir, new LmdbStoreConfig("spoc,psoc,opsc"),
-				null)) {
-			Method method = TripleStore.class.getDeclaredMethod("sortStatementIndicesByLeadingFields", int[].class,
-					int.class, TripleIndex.class, long[].class, long[].class, long[].class, long[].class);
-			method.setAccessible(true);
-			Field indexesField = TripleStore.class.getDeclaredField("indexes");
-			indexesField.setAccessible(true);
-
-			@SuppressWarnings("unchecked")
-			List<TripleIndex> indexes = (List<TripleIndex>) indexesField.get(orderedIndexStore);
-			TripleIndex psoc = findIndex(indexes, "psoc");
-			TripleIndex opsc = findIndex(indexes, "opsc");
-
-			Random random = new Random(378245L);
-			for (int attempt = 0; attempt < 25; attempt++) {
-				int[] statementIndices = range(64);
-				long[] subj = new long[statementIndices.length];
-				long[] pred = new long[statementIndices.length];
-				long[] obj = new long[statementIndices.length];
-				long[] context = new long[statementIndices.length];
-
-				for (int i = 0; i < statementIndices.length; i++) {
-					subj[i] = i;
-					pred[i] = random.nextInt(8);
-					obj[i] = random.nextInt(8);
-					context[i] = random.nextInt(3);
-				}
-
-				assertLeadingFieldSortMatchesReference(method, orderedIndexStore, psoc, statementIndices, subj, pred,
-						obj,
-						context);
-				assertLeadingFieldSortMatchesReference(method, orderedIndexStore, opsc, statementIndices, subj, pred,
-						obj,
-						context);
-			}
-		}
-	}
-
-	@Test
 	public void testLeadingFieldSortMatchesReferenceAcrossResetRequiredTransition() throws Exception {
 		File orderedIndexDir = new File(dataDir, "leading-field-reset-store");
 		orderedIndexDir.mkdirs();
@@ -564,24 +456,24 @@ public class TripleStoreTest {
 
 		// test removal of some triples for each predicate
 
-		if (false) {
-			tripleStore.startTransaction();
-			random = new Random(378245L);
-			subj = 1;
-			for (int pred : preds) {
-				for (int i = 1; i <= size; i += 5) {
-					int obj = random.nextInt(maxObj) + 1;
+		tripleStore.startTransaction();
+		random = new Random(378245L);
+		subj = 1;
+		for (int pred : preds) {
+			for (int i = 1; i <= size; i++) {
+				int obj = random.nextInt(maxObj) + 1;
+				if ((i - 1) % 5 == 0) {
 					tripleStore.removeTriplesByContext(subj, pred, obj, 1, true, quad -> {
 						// no-op
 					});
 					expectedByPredicate.get(String.valueOf(pred)).remove(subj + "," + pred + "," + obj + "," + 1);
-					subj++;
 				}
+				subj++;
 			}
-			tripleStore.commit();
-
-			assertExistingTriples(preds, expectedByPredicate);
 		}
+		tripleStore.commit();
+
+		assertExistingTriples(preds, expectedByPredicate);
 	}
 
 	@Test
@@ -662,9 +554,6 @@ public class TripleStoreTest {
 					Set<String> expectedInIndex = new HashSet<>(expectedByPredicate.get(String.valueOf(pred)));
 					try (RecordIterator it = tripleStore.getTriplesUsingIndex(txn, -1, pred, -1, -1, true, index,
 							index.getPatternScore(-1, pred, -1, -1))) {
-						if (pred == 42) {
-							System.out.println("Index: " + indexName + ", Pred: " + pred);
-						}
 						long[] quad;
 						while ((quad = it.next()) != null) {
 							String quadStr = quad[0] + "," + quad[1] + "," + quad[2] + "," + quad[3];

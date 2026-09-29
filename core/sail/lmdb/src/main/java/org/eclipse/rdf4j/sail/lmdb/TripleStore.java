@@ -521,7 +521,6 @@ class TripleStore implements Closeable {
 	public RecordIterator getTriples(Txn txn, long subj, long pred, long obj, long context, boolean explicit)
 			throws IOException {
 		TripleIndex index = TripleIndex.getBestIndex(indexes, subj, pred, obj, context);
-		// System.out.println("get triples: " + Arrays.asList(subj, pred, obj,context));
 		int indexScore = index.getPatternScore(subj, pred, obj, context);
 		return getTriplesUsingIndex(txn, subj, pred, obj, context, explicit, index, indexScore);
 	}
@@ -1165,6 +1164,8 @@ class TripleStore implements Closeable {
 		TripleIndex mainIndex = indexes.getFirst();
 		int addedCount = 0;
 		int remainingStart = count;
+		updater.setSortedInsertion(false);
+		updater.reset(4, mainIndex.getIndexSplitPosition());
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			PointerBuffer cursorHandle = stack.mallocPointer(1);
 			MDBVal keyVal = MDBVal.malloc(stack);
@@ -1190,9 +1191,9 @@ class TripleStore implements Closeable {
 					mainCursor = mainCursorHandle.get(0);
 				}
 				int rc = MDB_SUCCESS;
-				Chunks.mergeChunk(mainCursor, mainIndex.getIndexSplitPosition(), keyVal, dataVal, tuple,
-						keyScratch, valueScratch);
-				// updater.add(mainCursor, keyVal, dataVal, tuple);
+				// Chunks.mergeChunk(mainCursor, mainIndex.getIndexSplitPosition(), keyVal, dataVal, tuple,
+				// keyScratch, valueScratch);
+				updater.add(mainCursor, keyVal, dataVal, tuple);
 				if (rc == MDB_MAP_FULL && autoGrow) {
 					remainingStart = i;
 					break;
@@ -1218,7 +1219,7 @@ class TripleStore implements Closeable {
 					contextIncrements.addToValue(context[i], 1);
 				}
 			}
-			// updater.flush(mainCursor, keyVal, dataVal);
+			updater.flush(mainCursor, keyVal, dataVal);
 
 			int[] mainOrderIndices = Arrays.copyOf(sortedIndices, addedCount);
 			LongIntHashMap appliedContextIncrements = new LongIntHashMap();
@@ -1360,18 +1361,36 @@ class TripleStore implements Closeable {
 		int[] scratchIndices = ensureLeadingFieldScratchIndices(length);
 		long[] scratchValues = ensureLeadingFieldScratchValues(length);
 
-		boolean first = true;
+		boolean sortAll = true;
 		int fromStart = 0;
 		int nextLength = length;
 		for (StatementFieldValueAccessor fieldValueAccessor : index.fieldValueAccessors) {
 			long[] fieldValues = fieldValueAccessor.get(subj, pred, obj, context);
 
-			if (first) {
+			if (sortAll) {
+				boolean sorted = true;
+				boolean allSame = true;
+				for (int i = 1; i < length; i++) {
+					if (allSame && fieldValues[i - 1] != fieldValues[i]) {
+						allSame = false;
+					}
+					if (fieldValues[i - 1] > fieldValues[i]) {
+						sorted = false;
+						break;
+					}
+				}
+				if (sorted) {
+					if (allSame) {
+						// sort by next field
+						continue;
+					}
+					// nothing to do, all values are already sorted by this leading field
+					break;
+				}
 				System.arraycopy(fieldValues, 0, leadingValues, 0, length);
 				LeadingFieldSorters.lsdRadixSort(statementIndices, leadingValues, 0, length, scratchIndices,
-						scratchValues,
-						leadingFieldRadixCounts, leadingFieldRadixOffsets);
-				first = false;
+						scratchValues, leadingFieldRadixCounts, leadingFieldRadixOffsets);
+				sortAll = false;
 			} else {
 				boolean sortingNecessary = false;
 				int from = fromStart;
@@ -1391,7 +1410,7 @@ class TripleStore implements Closeable {
 						}
 						nextLength = to;
 						System.arraycopy(fieldValues, from, leadingValues, from, to - from);
-						LeadingFieldSorters.lsdRadixSort(statementIndices, leadingValues, from, to - from,
+						LeadingFieldSorters.lsdRadixSort(statementIndices, leadingValues, from, to,
 								scratchIndices, scratchValues,
 								leadingFieldRadixCounts, leadingFieldRadixOffsets);
 					}

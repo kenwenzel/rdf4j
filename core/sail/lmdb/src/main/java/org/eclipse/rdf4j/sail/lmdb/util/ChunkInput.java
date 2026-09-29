@@ -3,11 +3,10 @@ package org.eclipse.rdf4j.sail.lmdb.util;
 import static org.eclipse.rdf4j.sail.lmdb.Chunks.compareTuples;
 
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.NoSuchElementException;
 import java.util.function.Consumer;
-import java.util.function.Function;
 
+import org.eclipse.rdf4j.sail.lmdb.Chunks;
 import org.eclipse.rdf4j.sail.lmdb.Varint;
 
 public final class ChunkInput {
@@ -40,30 +39,54 @@ public final class ChunkInput {
 	private int valueElements;
 	private int valueTuplesIndex = -1;
 	private int valueTuplesCount;
+	private final long[][] tupleCache;
+	private int cacheIndex = -1;
+	private int cached = 0;
 
 	public ChunkInput(ByteBuffer keyBuffer, ByteBuffer valueBuffer, int elements, int splitPoint) {
+		this(keyBuffer, valueBuffer, elements, splitPoint, false);
+	}
+
+	public ChunkInput() {
+		this(EMPTY_READ_ONLY_BUFFER, EMPTY_READ_ONLY_BUFFER, 0, 0, true);
+	}
+
+	private ChunkInput(ByteBuffer keyBuffer, ByteBuffer valueBuffer, int elements, int splitPoint, boolean cache) {
 		this.keyBuffer = keyBuffer;
 		this.valueBuffer = valueBuffer;
 		this.elements = elements;
 		this.splitPoint = splitPoint;
 		this.valueElements = elements - splitPoint;
 		this.tuple = new long[4];
-	}
-
-	public ChunkInput() {
-		this(EMPTY_READ_ONLY_BUFFER, EMPTY_READ_ONLY_BUFFER, 0, 0);
+		if (cache) {
+			this.tupleCache = new long[Chunks.MAX_CHUNK_SIZE + 1][4];
+		} else {
+			this.tupleCache = null;
+		}
 	}
 
 	public long[] current() {
-		return tuple;
+		if (tupleCache != null) {
+			return tupleCache[cacheIndex];
+		} else {
+			return tuple;
+		}
 	}
 
 	public long[] next() {
 		if (hasNext) {
 			hasNext = false;
-			return tuple;
+			if (tupleCache != null) {
+				return tupleCache[cacheIndex];
+			} else {
+				return tuple;
+			}
+		}
+		if (tupleCache != null && cacheIndex < cached - 1) {
+			return tupleCache[++cacheIndex];
 		}
 		long value;
+		long[] result = tupleCache != null ? tupleCache[cacheIndex + 1] : tuple;
 		if (readKey) {
 			if (!keyBuffer.hasRemaining()) {
 				return null;
@@ -73,7 +96,7 @@ public final class ChunkInput {
 					throw new NoSuchElementException("No more elements in key buffer");
 				}
 				value = Varint.readUnsigned(keyBuffer);
-				tuple[i] = value;
+				result[i] = value;
 			}
 			readKey = false;
 		} else {
@@ -145,11 +168,13 @@ public final class ChunkInput {
 			if (valueTuplesIndex >= valueTuplesCount) {
 				return null;
 			}
+			long[] prev = tupleCache != null ? tupleCache[cacheIndex] : tuple;
 			for (int element = 0; element < valueElements; element++) {
-				long prevValue = tuple[splitPoint + element];
+				long prevValue = prev[splitPoint + element];
 
 				if (modes[element] == MODE_CONSTANT) {
 					// Delta is always zero, value stays unchanged
+					result[splitPoint + element] = prevValue;
 					continue;
 				}
 
@@ -173,11 +198,15 @@ public final class ChunkInput {
 				if (negative) {
 					delta = -delta;
 				}
-				tuple[splitPoint + element] = prevValue + delta;
+				result[splitPoint + element] = prevValue + delta;
 			}
 			valueTuplesIndex++;
 		}
-		return tuple;
+		if (tupleCache != null) {
+			cacheIndex++;
+			cached++;
+		}
+		return result;
 	}
 
 	public int seek(long[] targetTuple) {
@@ -208,14 +237,20 @@ public final class ChunkInput {
 		readKey = true;
 		valueTuplesIndex = -1;
 		hasNext = false;
+		cacheIndex = -1;
+		cached = 0;
 	}
 
-	public void reset() {
-		keyBuffer.rewind();
-		valueBuffer.rewind();
-		readKey = true;
-		valueTuplesIndex = -1;
+	public void rewind() {
 		hasNext = false;
+		if (cached > 0) {
+			cacheIndex = -1;
+		} else {
+			keyBuffer.rewind();
+			valueBuffer.rewind();
+			readKey = true;
+			valueTuplesIndex = -1;
+		}
 	}
 
 	private static long readPackedUnsigned(ByteBuffer buffer, int[] positions, int[] bitOffsets, int element,

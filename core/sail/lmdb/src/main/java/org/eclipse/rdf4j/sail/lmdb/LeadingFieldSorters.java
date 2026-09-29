@@ -23,7 +23,7 @@ final class LeadingFieldSorters {
 	public static void lsdRadixSort(int[] indices, long[] values, int from, int to, int[] scratchIndices,
 			long[] scratchValues, int[] counts, int[] offsets) {
 		int length = to - from;
-		if (length < 2 || isSorted(values, from, to)) {
+		if (length < 2) {
 			return;
 		}
 		if (length <= LSD_RADIX_THRESHOLD) {
@@ -53,8 +53,8 @@ final class LeadingFieldSorters {
 		long[] targetValues = scratchValues;
 
 		if ((activePasses & 1) != 0) {
-			System.arraycopy(indices, from, scratchIndices, from, to);
-			System.arraycopy(values, from, scratchValues, from, to);
+			System.arraycopy(indices, from, scratchIndices, from, length);
+			System.arraycopy(values, from, scratchValues, from, length);
 			sourceIndices = scratchIndices;
 			sourceValues = scratchValues;
 			targetIndices = indices;
@@ -66,13 +66,15 @@ final class LeadingFieldSorters {
 				continue;
 			}
 
-			Arrays.fill(counts, from, to, 0);
+			Arrays.fill(counts, 0, 256, 0);
+
 			for (int i = from; i < to; i++) {
-				counts[(int) ((sourceValues[i] >>> shift) & 0xFFL)]++;
+				int bucket = (int) ((sourceValues[i] >>> shift) & 0xFFL);
+				counts[bucket]++;
 			}
 
 			int offset = from;
-			for (int bucket = 0; bucket < length; bucket++) {
+			for (int bucket = 0; bucket < 256; bucket++) {
 				offsets[bucket] = offset;
 				offset += counts[bucket];
 			}
@@ -128,14 +130,5 @@ final class LeadingFieldSorters {
 			indices[position] = statementIndex;
 			values[position] = statementValue;
 		}
-	}
-
-	private static boolean isSorted(long[] values, int from, int to) {
-		for (int i = from + 1; i < to; i++) {
-			if (values[i - 1] > values[i]) {
-				return false;
-			}
-		}
-		return true;
 	}
 }
