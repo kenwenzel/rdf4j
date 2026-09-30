@@ -16,18 +16,10 @@ package org.eclipse.rdf4j.sail.lmdb;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
-import static org.lwjgl.util.lmdb.LMDB.MDB_GET_BOTH_RANGE;
 import static org.lwjgl.util.lmdb.LMDB.MDB_KEYEXIST;
-import static org.lwjgl.util.lmdb.LMDB.MDB_LAST_DUP;
-import static org.lwjgl.util.lmdb.LMDB.MDB_NOOVERWRITE;
 import static org.lwjgl.util.lmdb.LMDB.MDB_NOTFOUND;
-import static org.lwjgl.util.lmdb.LMDB.MDB_PREV_DUP;
 import static org.lwjgl.util.lmdb.LMDB.MDB_RDONLY;
-import static org.lwjgl.util.lmdb.LMDB.MDB_SET;
 import static org.lwjgl.util.lmdb.LMDB.MDB_SUCCESS;
-import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_del;
-import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_get;
-import static org.lwjgl.util.lmdb.LMDB.mdb_cursor_put;
 import static org.lwjgl.util.lmdb.LMDB.mdb_dbi_open;
 import static org.lwjgl.util.lmdb.LMDB.mdb_strerror;
 import static org.lwjgl.util.lmdb.LMDB.mdb_txn_abort;
@@ -38,12 +30,10 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 
-import org.eclipse.rdf4j.sail.lmdb.util.VarintTupleIO;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.system.Pointer;
-import org.lwjgl.util.lmdb.MDBVal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

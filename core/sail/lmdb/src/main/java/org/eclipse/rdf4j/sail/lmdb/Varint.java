@@ -13,7 +13,6 @@ package org.eclipse.rdf4j.sail.lmdb;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-import org.eclipse.rdf4j.sail.lmdb.util.EntryMatcher;
 import org.eclipse.rdf4j.sail.lmdb.util.SignificantBytesBE;
 
 /**
@@ -534,57 +533,4 @@ public final class Varint {
 		}
 		return value;
 	}
-
-	private static int compareRegion(ByteBuffer bb1, int startIdx1, ByteBuffer bb2, int startIdx2, int length) {
-		int result = 0;
-		for (int i = 0; result == 0 && i < length; i++) {
-			result = (bb1.get(startIdx1 + i) & 0xff) - (bb2.get(startIdx2 + i) & 0xff);
-		}
-		return result;
-	}
-
-	/**
-	 * Use of this class is deprecated, use {@link EntryMatcher} instead.
-	 */
-	@Deprecated(forRemoval = true)
-	public static class GroupMatcher {
-
-		final ByteBuffer value;
-		final boolean[] shouldMatch;
-		final int[] lengths;
-
-		public GroupMatcher(ByteBuffer value, boolean[] shouldMatch) {
-			this.value = value;
-			this.shouldMatch = shouldMatch;
-			this.lengths = new int[shouldMatch.length];
-			int pos = 0;
-			for (int i = 0; i < lengths.length; i++) {
-				int length = firstToLength(value.get(pos));
-				lengths[i] = length;
-				pos += length;
-			}
-		}
-
-		public GroupMatcher(ByteBuffer value, boolean a, boolean b, boolean c, boolean d, boolean e) {
-			this(value, new boolean[] { a, b, c, d, e });
-		}
-
-		public boolean matches(ByteBuffer other) {
-			int thisPos = 0;
-			int otherPos = 0;
-			for (int i = 0; i < shouldMatch.length; i++) {
-				int length = lengths[i];
-				int otherLength = firstToLength(other.get(otherPos));
-				if (shouldMatch[i]) {
-					if (length != otherLength || compareRegion(value, thisPos, other, otherPos, length) != 0) {
-						return false;
-					}
-				}
-				thisPos += length;
-				otherPos += otherLength;
-			}
-			return true;
-		}
-	}
-
 }

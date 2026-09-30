@@ -13,6 +13,7 @@ package org.eclipse.rdf4j.sail.lmdb;
 
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.E;
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.compareRegion;
+import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.openDatabaseWithTxn;
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.readTransaction;
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.writeTransaction;
 import static org.lwjgl.system.MemoryStack.stackPush;
@@ -92,9 +93,7 @@ import org.eclipse.rdf4j.sail.lmdb.estimate.LmdbPageCardinalityEstimator;
 import org.eclipse.rdf4j.sail.lmdb.estimate.LmdbPageCardinalityEstimator.CardinalityEstimate;
 import org.eclipse.rdf4j.sail.lmdb.estimate.LmdbPageCardinalityEstimator.IndexShape;
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkInput;
-import org.eclipse.rdf4j.sail.lmdb.util.EntryMatcher;
 import org.eclipse.rdf4j.sail.lmdb.util.GroupMatcher;
-import org.eclipse.rdf4j.sail.lmdb.util.VarintTupleIO;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.lmdb.MDBEnvInfo;
@@ -144,6 +143,7 @@ class TripleStore implements Closeable {
 
 	long env;
 	long writeTxn;
+	private final int mainDbi;
 	private final int contextsDbi;
 	private int pageSize;
 	private final boolean autoGrow;
@@ -160,8 +160,15 @@ class TripleStore implements Closeable {
 	private final int[] leadingFieldRadixOffsets = new int[256];
 	private final LmdbPageCardinalityEstimator pageEstimator;
 	private final AtomicLong dataRevision = new AtomicLong();
+	private final AtomicLong mappingGeneration = new AtomicLong();
 
 	private TxnRecordCache recordCache = null;
+
+	private record DatabaseHandles(int mainDbi, int contextsDbi) {
+	}
+
+	private record PageAndMapState(int pageSize, boolean empty) {
+	}
 
 	TripleStore(File dir, LmdbStoreConfig config, ValueStore valueStore) throws IOException, SailException {
 		this(dir, new StoreProperties(dir), config, valueStore);
@@ -200,18 +207,24 @@ class TripleStore implements Closeable {
 			flags |= MDB_NORDAHEAD;
 		}
 		E(mdb_env_open(env, this.dir.getAbsolutePath(), flags, 0664));
-		// open contexts database
-		contextsDbi = writeTransaction(env, (stack, txn) -> {
+		// Open the unnamed main database and contexts database in one serialized setup transaction. The main DBI is
+		// retained for page-estimator read scopes; opening it again while readers are active mutates LMDB's shared
+		// comparator state.
+		DatabaseHandles databaseHandles = writeTransaction(env, (stack, txn) -> {
+			int mainDbi = openDatabaseWithTxn(txn, null, 0);
 			String name = "contexts";
 			IntBuffer ip = stack.mallocInt(1);
 			if (mdb_dbi_open(txn, name, 0, ip) == MDB_NOTFOUND) {
 				E(mdb_dbi_open(txn, name, MDB_CREATE, ip));
 			}
-			return ip.get(0);
+			return new DatabaseHandles(mainDbi, ip.get(0));
 		});
+		mainDbi = databaseHandles.mainDbi();
+		contextsDbi = databaseHandles.contextsDbi();
 
 		txnManager = new TxnManager(env, Mode.RESET);
-		pageEstimator = pageWalkingEstimatorEnabled ? new LmdbPageCardinalityEstimator(dataMdbFile, env) : null;
+		pageEstimator = pageWalkingEstimatorEnabled ? new LmdbPageCardinalityEstimator(dataMdbFile, env, mainDbi)
+				: null;
 
 		try {
 			String indexSpecStr = config.getTripleIndexes();
@@ -250,8 +263,11 @@ class TripleStore implements Closeable {
 				}
 			}
 			properties.setTripleIndexes(indexSpecStr);
-		} catch (IOException | SailException e) {
-			endTransaction(false);
+		} catch (IOException e) {
+			cleanupAfterInitializationFailure(e);
+			throw e;
+		} catch (RuntimeException | Error e) {
+			cleanupAfterInitializationFailure(e);
 			throw e;
 		}
 
@@ -316,30 +332,88 @@ class TripleStore implements Closeable {
 	}
 
 	private void initializePageAndMapSize(long tripleDbSize) throws IOException {
-		// initialize page size and set map size for env
-		readTransaction(env, (stack, txn) -> {
+		// Discover page size and emptiness while active. LMDB must not resize its map while the transaction is pinned,
+		// because the native resize may invalidate the transaction's mapping.
+		PageAndMapState state = readTransaction(env, (stack, txn) -> {
 			MDBStat stat = MDBStat.malloc(stack);
 			TripleIndex mainIndex = indexes.getFirst();
-			mdb_stat(txn, mainIndex.getDB(true), stat);
+			E(mdb_stat(txn, mainIndex.getDB(true), stat));
+			return new PageAndMapState(stat.ms_psize(), stat.ms_entries() == 0);
+		});
+		pageSize = state.pageSize();
 
-			boolean isEmpty = stat.ms_entries() == 0;
-			pageSize = stat.ms_psize();
-			// align map size with page size
-			long configMapSize = (tripleDbSize / pageSize) * pageSize;
-			if (isEmpty) {
-				// this is an empty db, use configured map size
-				mdb_env_set_mapsize(env, configMapSize);
-			}
+		// Align the configured size with LMDB's page size, preserving the zero-size and empty-versus-populated rules.
+		long configMapSize = (tripleDbSize / pageSize) * pageSize;
+		if (state.empty()) {
+			// This is an empty database, so use the configured map size.
+			E(setMapSize(configMapSize));
+		}
+
+		try (MemoryStack stack = stackPush()) {
 			MDBEnvInfo info = MDBEnvInfo.malloc(stack);
-			mdb_env_info(env, info);
+			E(mdb_env_info(env, info));
 			mapSize = info.me_mapsize();
 			if (mapSize < configMapSize) {
-				// configured map size is larger than map size stored in env, increase map size
-				mdb_env_set_mapsize(env, configMapSize);
-				mapSize = configMapSize;
+				// The configured map size is larger than the size stored in the environment, so increase it.
+				E(setMapSize(configMapSize));
+				E(mdb_env_info(env, info));
 			}
-			return null;
-		});
+			// LMDB may clamp the requested size, so retain the successful native value rather than the request.
+			mapSize = info.me_mapsize();
+		}
+	}
+
+	private void cleanupAfterInitializationFailure(Throwable failure) {
+		try {
+			endTransaction(false);
+		} catch (Throwable cleanupFailure) {
+			failure.addSuppressed(cleanupFailure);
+		}
+
+		if (pageEstimator != null) {
+			try {
+				pageEstimator.close();
+			} catch (Throwable cleanupFailure) {
+				failure.addSuppressed(cleanupFailure);
+			}
+		}
+		for (TripleIndex index : indexes) {
+			try {
+				index.close();
+			} catch (Throwable cleanupFailure) {
+				failure.addSuppressed(cleanupFailure);
+			}
+		}
+		try {
+			txnManager.close();
+		} catch (Throwable cleanupFailure) {
+			failure.addSuppressed(cleanupFailure);
+		}
+		if (env != 0) {
+			try {
+				mdb_env_close(env);
+			} catch (Throwable cleanupFailure) {
+				failure.addSuppressed(cleanupFailure);
+			} finally {
+				env = 0;
+			}
+		}
+	}
+
+	/**
+	 * Advances the mapping generation before every resize attempt. Callers retain their existing handling of the native
+	 * return code, while the generation remains monotonic even when LMDB rejects an attempted size.
+	 */
+	private int setMapSize(long requestedMapSize) throws IOException {
+		while (true) {
+			long current = mappingGeneration.get();
+			if (current == Long.MAX_VALUE) {
+				throw new IOException("LMDB mapping generation exhausted");
+			}
+			if (mappingGeneration.compareAndSet(current, current + 1)) {
+				return mdb_env_set_mapsize(env, requestedMapSize);
+			}
+		}
 	}
 
 	private String getIndexName(String fieldSeq) {
@@ -401,7 +475,7 @@ class TripleStore implements Closeable {
 									try {
 										txnManager.deactivate();
 										mapSize = LmdbUtil.autoGrowMapSize(mapSize, pageSize, 0);
-										E(mdb_env_set_mapsize(env, mapSize));
+										E(setMapSize(mapSize));
 										logger.debug("resized map to {}", mapSize);
 									} finally {
 										try {
@@ -719,7 +793,7 @@ class TripleStore implements Closeable {
 		TripleIndex primaryIndex = indexes.get(primaryIndexPosition);
 		try {
 			CardinalityEstimate primary = cardinalityUsingPageEstimator(primaryIndexPosition, subj, pred, obj, context,
-				bindingMask);
+					bindingMask);
 			if (!primary.secondaryEvidenceRecommended()) {
 				return primary.entries();
 			}
@@ -731,27 +805,27 @@ class TripleStore implements Closeable {
 			TripleIndex secondaryIndex = indexes.get(secondaryIndexPosition);
 			try {
 				CardinalityEstimate secondary = cardinalityUsingPageEstimator(secondaryIndexPosition, subj, pred, obj,
-					context, bindingMask);
+						context, bindingMask);
 				return LmdbPageCardinalityEstimator.combineIndexEstimates(primary, secondary).entries();
 			} catch (IOException | RuntimeException secondaryFailure) {
 				logger.debug("Secondary page cardinality estimate failed for index {}; using primary index {}",
-					new String(secondaryIndex.getFieldSeq()), new String(primaryIndex.getFieldSeq()),
-					secondaryFailure);
+						new String(secondaryIndex.getFieldSeq()), new String(primaryIndex.getFieldSeq()),
+						secondaryFailure);
 				return primary.entries();
 			}
 		} catch (IOException | RuntimeException e) {
 			logger.warn("Page cardinality estimator failed for index {}, falling back to the RDF4J 5.3.2 sampler",
-				new String(primaryIndex.getFieldSeq()), e);
+					new String(primaryIndex.getFieldSeq()), e);
 			return cardinalityUsingRdf4j532Estimator(subj, pred, obj, context);
 		}
 	}
 
 	private CardinalityEstimate cardinalityUsingPageEstimator(int indexPosition, long subj, long pred, long obj,
-		long context, int bindingMask) throws IOException {
+			long context, int bindingMask) throws IOException {
 		LmdbPageCardinalityEstimator estimator = pageEstimator;
 		if (estimator == null) {
 			return CardinalityEstimate
-				.unqualified(cardinalityUsingRdf4j532Estimator(subj, pred, obj, context));
+					.unqualified(cardinalityUsingRdf4j532Estimator(subj, pred, obj, context));
 		}
 		TripleIndex index = indexes.get(indexPosition);
 		IndexShape indexShape = estimator.indexShape(indexPosition, bindingMask);
@@ -764,30 +838,37 @@ class TripleStore implements Closeable {
 			try (LmdbPageCardinalityEstimator.ReadView view = estimator.readTransaction(txn, generation)) {
 				if (bindingMask == 0) {
 					double exact = (double) view.totalEntries(explicitDbName)
-						+ view.totalEntries(inferredDbName);
+							+ view.totalEntries(inferredDbName);
 					return CardinalityEstimate.exact(exact);
 				}
 
+				long[] tuple = new long[4];
+				index.getMinEntry(tuple, indexShape.rangeSubject(subj), indexShape.rangePredicate(pred),
+						indexShape.rangeObject(obj), indexShape.rangeContext(context));
 				ByteBuffer minKeyBuffer = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-				index.getMinKey(minKeyBuffer, indexShape.rangeSubject(subj), indexShape.rangePredicate(pred),
-					indexShape.rangeObject(obj), indexShape.rangeContext(context));
+				for (long v : tuple) {
+					Varint.writeUnsigned(minKeyBuffer, v);
+				}
 				minKeyBuffer.flip();
 				byte[] minKey = toArray(minKeyBuffer);
 
 				ByteBuffer maxKeyBuffer = stack.malloc(TripleIndex.MAX_KEY_LENGTH);
-				index.getMaxKey(maxKeyBuffer, indexShape.rangeSubject(subj), indexShape.rangePredicate(pred),
-					indexShape.rangeObject(obj), indexShape.rangeContext(context));
+				index.getMaxEntry(tuple, indexShape.rangeSubject(subj), indexShape.rangePredicate(pred),
+						indexShape.rangeObject(obj), indexShape.rangeContext(context));
+				for (long v : tuple) {
+					Varint.writeUnsigned(maxKeyBuffer, v);
+				}
 				maxKeyBuffer.flip();
 				byte[] maxKey = toArray(maxKeyBuffer);
 
 				GroupMatcher matcher = indexShape.residualFieldCount() == 0 ? null
-					: index.createMatcher(subj, pred, obj, context);
+						: index.createKeyMatcher(subj, pred, obj, context);
 				LmdbPageCardinalityEstimator.Estimate explicit = view.estimateEntriesWithQuality(
-					explicitDbName, minKey, minKey.length, maxKey, maxKey.length, matcher,
-					indexShape.residualFieldCount());
+						explicitDbName, minKey, minKey.length, maxKey, maxKey.length, matcher,
+						indexShape.residualFieldCount());
 				LmdbPageCardinalityEstimator.Estimate inferred = view.estimateEntriesWithQuality(
-					inferredDbName, minKey, minKey.length, maxKey, maxKey.length, matcher,
-					indexShape.residualFieldCount());
+						inferredDbName, minKey, minKey.length, maxKey, maxKey.length, matcher,
+						indexShape.residualFieldCount());
 				return LmdbPageCardinalityEstimator.combineDatabaseEstimates(explicit, inferred);
 			}
 		});
@@ -1774,7 +1855,7 @@ class TripleStore implements Closeable {
 						}
 						E(mdb_txn_commit(writeTxn));
 						mapSize = LmdbUtil.autoGrowMapSize(mapSize, pageSize, 0);
-						E(mdb_env_set_mapsize(env, mapSize));
+						E(setMapSize(mapSize));
 						logger.debug("resized map to {}", mapSize);
 						E(mdb_txn_begin(env, NULL, 0, pp));
 						writeTxn = pp.get(0);
@@ -1850,7 +1931,7 @@ class TripleStore implements Closeable {
 							try {
 								txnManager.deactivate();
 								mapSize = LmdbUtil.autoGrowMapSize(mapSize, pageSize, 0);
-								E(mdb_env_set_mapsize(env, mapSize));
+								E(setMapSize(mapSize));
 								logger.debug("resized map to {}", mapSize);
 								// restart write transaction
 								try (MemoryStack stack = stackPush()) {

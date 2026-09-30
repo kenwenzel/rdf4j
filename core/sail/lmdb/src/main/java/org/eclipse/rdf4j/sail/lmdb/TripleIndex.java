@@ -12,7 +12,6 @@ package org.eclipse.rdf4j.sail.lmdb;
 
 import static org.eclipse.rdf4j.sail.lmdb.LmdbUtil.openDatabaseWithTxn;
 import static org.lwjgl.util.lmdb.LMDB.MDB_CREATE;
-import static org.lwjgl.util.lmdb.LMDB.MDB_DUPSORT;
 import static org.lwjgl.util.lmdb.LMDB.mdb_dbi_close;
 import static org.lwjgl.util.lmdb.LMDB.mdb_drop;
 
@@ -29,9 +28,8 @@ import java.util.Set;
 import java.util.StringTokenizer;
 
 import org.eclipse.rdf4j.sail.SailException;
-import org.eclipse.rdf4j.sail.lmdb.util.EntryMatcher;
+import org.eclipse.rdf4j.sail.lmdb.util.GroupMatcher;
 import org.eclipse.rdf4j.sail.lmdb.util.IndexEntryWriters;
-import org.eclipse.rdf4j.sail.lmdb.util.VarintTupleIO;
 
 class TripleIndex {
 	static final int MAX_KEY_LENGTH = 4 * 9;
@@ -216,6 +214,40 @@ class TripleIndex {
 
 	public int getIndexSplitPosition() {
 		return indexSplitPosition;
+	}
+
+	GroupMatcher createKeyMatcher(long subj, long pred, long obj, long context) {
+		int length = getLength(subj, pred, obj, context);
+
+		ByteBuffer bb = ByteBuffer.allocate(length);
+		long[] tuple = new long[4];
+		toEntry(tuple, subj == -1 ? 0 : subj, pred == -1 ? 0 : pred, obj == -1 ? 0 : obj, context == -1 ? 0 : context);
+		for (long value : tuple) {
+			Varint.writeUnsigned(bb, value);
+		}
+		bb.flip();
+
+		return new GroupMatcher(bb.array(), new boolean[] { tuple[0] > 0, tuple[1] > 0, tuple[2] > 0, tuple[3] > 0 });
+	}
+
+	private int getLength(long subj, long pred, long obj, long context) {
+		int length = 4;
+		if (subj > 240) {
+			length += 8;
+		}
+		if (pred > 240) {
+			length += 8;
+
+		}
+		if (obj > 240) {
+			length += 8;
+
+		}
+		if (context > 240) {
+			length += 8;
+
+		}
+		return length;
 	}
 
 	void toEntry(long[] tuple, long subj, long pred, long obj, long context) {

@@ -17,8 +17,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import org.eclipse.rdf4j.sail.lmdb.util.EntryMatcher;
-import org.eclipse.rdf4j.sail.lmdb.util.VarintTupleIO;
+import org.eclipse.rdf4j.sail.lmdb.util.GroupMatcher;
 
 /**
  * Bounded range-cardinality estimator for one named LMDB B+tree in one pinned snapshot.
@@ -125,12 +124,12 @@ final class LmdbBtreeRangeCounter {
 	 * before sampling. The returned hard bounds are valid even when the point estimate is approximate.
 	 */
 	RangeCountResult estimateRange(LmdbDb db, byte[] minKey, int minKeyLength, byte[] maxKey, int maxKeyLength,
-			EntryMatcher matcher) throws IOException {
+			GroupMatcher matcher) throws IOException {
 		return estimateRange(db, minKey, minKeyLength, maxKey, maxKeyLength, matcher, matcher == null ? 0 : 1);
 	}
 
 	RangeCountResult estimateRange(LmdbDb db, byte[] minKey, int minKeyLength, byte[] maxKey, int maxKeyLength,
-			EntryMatcher matcher, int residualFieldCount) throws IOException {
+			GroupMatcher matcher, int residualFieldCount) throws IOException {
 		RangeCountResult result = new RangeCountResult();
 		if (db.isEmpty()) {
 			result.entries = 0L;
@@ -275,7 +274,7 @@ final class LmdbBtreeRangeCounter {
 	}
 
 	private long estimateResidual(LmdbDb db, RangePlan direct, PreparedPlan prepared, boolean dupSort,
-			byte[] minKey, int minKeyLength, byte[] maxKey, int maxKeyLength, EntryMatcher matcher,
+			byte[] minKey, int minKeyLength, byte[] maxKey, int maxKeyLength, GroupMatcher matcher,
 			int residualFieldCount, LeafMeasurementCache matcherMeasurements,
 			LocalPageCache localPages,
 			RangeCountResult result) throws IOException {
@@ -403,7 +402,7 @@ final class LmdbBtreeRangeCounter {
 	 * {@link #collectExactLeafPlan(List, int, LocalPageCache, RangeCountResult)} is represented by {@code exact=false};
 	 * boundary measurements remain usable as proven mass and a hard lower bound.
 	 */
-	private PreparedPlan preparePlan(RangePlan plan, EntryMatcher matcher, boolean dupSort,
+	private PreparedPlan preparePlan(RangePlan plan, GroupMatcher matcher, boolean dupSort,
 			LeafMeasurementCache measurements, LocalPageCache localPages, RangeCountResult result) throws IOException {
 		if (plan.empty) {
 			return new PreparedPlan(LeafMeasurement.ZERO, true, LeafMeasurement.ZERO);
@@ -575,7 +574,7 @@ final class LmdbBtreeRangeCounter {
 	 * Stratifies every subtree span, averages inverse-probability contributions within each band, and sums the bands.
 	 * Repeated physical leaves still contribute to the estimator, but are counted once for effective-coverage metrics.
 	 */
-	private SampleAggregate sampleSpans(LmdbDb db, List<SiblingSpan> spans, EntryMatcher matcher,
+	private SampleAggregate sampleSpans(LmdbDb db, List<SiblingSpan> spans, GroupMatcher matcher,
 			boolean dupSort, int totalBudget, long seed, LeafMeasurementCache measurements,
 			LocalPageCache localPages, RangeCountResult stats) throws IOException {
 		if (spans.isEmpty()) {
@@ -640,7 +639,7 @@ final class LmdbBtreeRangeCounter {
 
 	/** Follows one coordinate through a subtree and returns the selected leaf plus its inverse path probability. */
 	private WeightedLeaf sampleLeaf(SiblingSpan span, int bandStart, int bandEnd, double coordinate,
-			EntryMatcher matcher, boolean dupSort, LeafMeasurementCache measurements, LocalPageCache localPages,
+			GroupMatcher matcher, boolean dupSort, LeafMeasurementCache measurements, LocalPageCache localPages,
 			RangeCountResult stats) throws IOException {
 		int bandWidth = bandEnd - bandStart;
 		double scaled = coordinate * bandWidth;
@@ -708,7 +707,7 @@ final class LmdbBtreeRangeCounter {
 		return probes;
 	}
 
-	private LeafMeasurement measureLeafPage(long pageNumber, EntryMatcher matcher, boolean dupSort,
+	private LeafMeasurement measureLeafPage(long pageNumber, GroupMatcher matcher, boolean dupSort,
 			LeafMeasurementCache measurements, LocalPageCache localPages, RangeCountResult stats) throws IOException {
 		LeafMeasurement cached = measurements.get(pageNumber);
 		if (cached != null) {
@@ -733,7 +732,7 @@ final class LmdbBtreeRangeCounter {
 	 * each selected key's duplicate multiplicity while {@code outerKeys} remains the physical key count.
 	 */
 	private LeafMeasurement measureLeafSlice(LmdbPage page, int fromInclusive, int toExclusive,
-			EntryMatcher matcher, boolean dupSort, RangeCountResult stats) throws IOException {
+			GroupMatcher matcher, boolean dupSort, RangeCountResult stats) throws IOException {
 		ensureOuterLeaf(page);
 		if (fromInclusive < 0 || fromInclusive > toExclusive || toExclusive > page.numKeys) {
 			throw new IOException("Invalid leaf slice [" + fromInclusive + ',' + toExclusive + ") for page "
@@ -767,12 +766,12 @@ final class LmdbBtreeRangeCounter {
 	}
 
 	private boolean matches(LmdbPage page, int nodeOffset, int keySize, ByteBuffer keyView,
-			EntryMatcher matcher) {
+			GroupMatcher matcher) {
 		int keyOffset = page.keyOffsetAt(nodeOffset);
 		keyView.clear();
 		keyView.position(keyOffset);
 		keyView.limit(keyOffset + keySize);
-		return matcher.matches(new VarintTupleIO(1, keyView), null);
+		return matcher.matches(keyView);
 	}
 
 	private long duplicateMultiplicity(LmdbPage page, int nodeOffset, int keySize) throws IOException {

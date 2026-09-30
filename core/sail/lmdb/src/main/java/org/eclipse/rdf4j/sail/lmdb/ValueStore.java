@@ -96,7 +96,6 @@ import org.eclipse.rdf4j.sail.lmdb.model.LmdbResource;
 import org.eclipse.rdf4j.sail.lmdb.model.LmdbTripleTerm;
 import org.eclipse.rdf4j.sail.lmdb.model.LmdbValue;
 import org.eclipse.rdf4j.sail.lmdb.util.ChunkInput;
-import org.eclipse.rdf4j.sail.lmdb.util.VarintTupleIO;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.lmdb.MDBEnvInfo;
